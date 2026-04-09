@@ -12,14 +12,27 @@ A CLI tool for managing Docker containers on remote machines. Build, run, and ma
 
 ## Installation
 
+**From source with uv (recommended):**
+
+uv provides fast, reliable dependency resolution and lock file management. [Install uv](https://docs.astral.sh/uv/):
+
 ```bash
-pip install dockhand
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Or from source:
+Then clone and sync:
 
 ```bash
-pip install -e .
+git clone https://github.com/YOUR_USERNAME/dockhand.git
+cd dockhand
+uv sync
+uv run dockhand --help
+```
+
+**Or with pip:**
+
+```bash
+pip install dockhand
 ```
 
 ## Usage
@@ -44,32 +57,35 @@ All commands work with the same `.dtu_hpc.json` configuration file format. See [
 
 ```bash
 # Build image and run a container
-dockhand submit --gpus all 'python train.py --epochs 10'
+uv run dockhand submit --gpus all 'python train.py --epochs 10'
 
 # Run a container from an already-built image
-dockhand run 'python train.py --epochs 20'
+uv run dockhand run 'python train.py --epochs 20'
 
 # Build image without running
-dockhand install --dockerfile Dockerfile.prod
+uv run dockhand install --dockerfile Dockerfile.prod
 
 # Check logs from the last container
-dockhand logs --n 50
+uv run dockhand logs --n 50
 
 # Stop the last running container
-dockhand stop
+uv run dockhand stop
 
 # Remove the last container and from history
-dockhand remove --from-history
+uv run dockhand remove --from-history
 
 # See all past runs
-dockhand history
+uv run dockhand history
 
 # Download results
-dockhand download results/model.pth
+uv run dockhand download results/model.pth
 
 # Resubmit the latest container with different GPUs
-dockhand resubmit --gpus '2'
+uv run dockhand resubmit --gpus '2'
 ```
+
+**Note:** If you've installed dockhand globally, you can omit `uv run`.
+
 
 ## Configuration
 
@@ -160,8 +176,8 @@ Use profiles to switch between different configurations:
 ```
 
 ```bash
-dockhand --profile dev submit 'python train.py'
-dockhand --profile prod submit 'python train.py'
+uv run dockhand --profile dev submit 'python train.py'
+uv run dockhand --profile prod submit 'python train.py'
 ```
 
 ### Complete Example

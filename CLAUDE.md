@@ -8,29 +8,36 @@
 
 ## Commands
 
-**Installation:**
+**Prerequisites:**
+- Install [uv](https://docs.astral.sh/uv/): `curl -LsSf https://astral.sh/uv/install.sh | sh`
+
+**Installation & Setup:**
 ```bash
-pip install -e .
+# Install dependencies and create lock file
+uv sync
+
+# Update lock file with latest versions (if needed)
+uv lock --upgrade
 ```
 
 **Run the CLI locally:**
 ```bash
-dockhand --help
+uv run dockhand --help
 ```
 
 **Lint:**
 ```bash
-ruff check .
+uv run ruff check .
 ```
 
 **Format:**
 ```bash
-ruff format .
+uv run ruff format .
 ```
 
 **Auto-fix lint issues:**
 ```bash
-ruff check --fix .
+uv run ruff check --fix .
 ```
 
 ## Architecture
@@ -173,32 +180,32 @@ All options are optional except `dockerfile`, `imagename`, and `volumes` within 
 
 **Development iteration:**
 ```bash
-dockhand submit --gpus 1 'python train.py'  # Build + run with 1 GPU
-dockhand logs --n 50                         # Check last 50 log lines
-dockhand resubmit --gpus 2                   # Re-run with 2 GPUs
-dockhand download results/model.pth          # Get results back
+uv run dockhand submit --gpus 1 'python train.py'  # Build + run with 1 GPU
+uv run dockhand logs --n 50                        # Check last 50 log lines
+uv run dockhand resubmit --gpus 2                  # Re-run with 2 GPUs
+uv run dockhand download results/model.pth         # Get results back
 ```
 
 **Quick rebuild:**
 ```bash
-dockhand install --dockerfile Dockerfile.dev  # Rebuild only
-dockhand run 'bash'                           # Run interactively
+uv run dockhand install --dockerfile Dockerfile.dev  # Rebuild only
+uv run dockhand run 'bash'                           # Run interactively
 ```
 
 **Using profiles:**
 ```bash
-dockhand --profile dev submit 'python train.py'   # Use dev profile
-dockhand --profile prod install                   # Build prod image
+uv run dockhand --profile dev submit 'python train.py'   # Use dev profile
+uv run dockhand --profile prod install                   # Build prod image
 ```
 
 ## Testing & Validation
 
 No automated tests yet. Manual validation:
 ```bash
-dockhand --help              # Check CLI structure
-dockhand submit --help       # Check submit options
-ruff check .                 # Lint
-ruff format --check .        # Format check
+uv run dockhand --help         # Check CLI structure
+uv run dockhand submit --help  # Check submit options
+uv run ruff check .            # Lint
+uv run ruff format --check .   # Format check
 ```
 
 ## Important Design Decisions
@@ -235,8 +242,8 @@ Potential improvements specific to dockhand:
 When working on dockhand:
 1. Keep the flat command structure — don't re-introduce `docker` sub-groups
 2. Maintain `.dtu_hpc.json` compatibility
-3. Test manually with `dockhand <command> --help` and actual docker operations
-4. Follow ruff lint/format rules
+3. Test manually with `uv run dockhand <command> --help` and actual docker operations
+4. Follow ruff lint/format rules (use `uv run ruff check . && uv run ruff format .`)
 5. Document new features in README.md and CLAUDE.md
 6. Update EXTRACTION_NOTES.md if architecture changes
 

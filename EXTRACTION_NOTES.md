@@ -27,20 +27,22 @@ This standalone `dockhand` CLI was extracted from DTU-HPC-CLI on 2026-04-09 to p
 
 ## Setup
 
-### Install from source
+### Install from source with uv (recommended)
+```bash
+cd dockhand
+uv sync
+uv run dockhand --help
+```
+
+### Install with pip
 ```bash
 cd dockhand
 pip install -e .
 ```
 
-### Install dependencies
+### Manual dependency installation
 ```bash
 pip install typer fabric paramiko gitpython
-```
-
-### Use with pyenv/poetry/uv
-```bash
-uv run dockhand --help
 ```
 
 ## Configuration compatibility
