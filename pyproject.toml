@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dockhand"
+version = "0.1.0"
+description = "CLI for managing Docker containers on remote machines"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "Nicholas P. Hansen" }]
+dependencies = [
+    "typer>=0.15.4",
+    "fabric>=3.2.2",
+    "paramiko>=3.4.1",
+    "gitpython>=3.1.43",
+]
+
+[project.urls]
+Repository = "https://github.com/NicholasPHansen/dockhand"
+
+[project.scripts]
+dockhand = "dockhand:cli"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
