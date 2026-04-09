@@ -7,8 +7,6 @@ from typing import List
 from dockhand.constants import CONFIG_FILENAME, HISTORY_FILENAME
 from dockhand.error import error_and_exit
 
-DEFAULT_HOSTNAME = "login1.hpc.dtu.dk"
-
 
 @dataclasses.dataclass
 class DockerVolumesConfig:
@@ -33,8 +31,7 @@ class DockerConfig:
     volumes: list[DockerVolumesConfig]
     ports: list[str]
     gpus: str
-    sync: bool
-    workdir: str
+    containerworkdir: str
 
     @classmethod
     def load(cls, config: dict):
@@ -57,13 +54,18 @@ class DockerConfig:
         if "ports" not in docker:
             docker["ports"] = None
 
-        if "sync" not in docker:
-            docker["sync"] = True
+        if "containerworkdir" not in docker:
+            docker["containerworkdir"] = "/"
 
-        if "workdir" not in docker:
-            docker["workdir"] = "/"
-
-        return cls(**docker)
+        # Only pass fields that DockerConfig expects
+        return cls(
+            dockerfile=docker["dockerfile"],
+            imagename=docker["imagename"],
+            volumes=docker["volumes"],
+            ports=docker["ports"],
+            gpus=docker["gpus"],
+            containerworkdir=docker["containerworkdir"],
+        )
 
     @classmethod
     def validate(cls, config: dict) -> dict:
@@ -75,9 +77,7 @@ class DockerConfig:
         dockerfile = config.get("dockerfile")
         if dockerfile is not None:
             if not isinstance(dockerfile, str):
-                error_and_exit(
-                    f"Invalid type for dockerfile. Expected string, got {type(dockerfile).__name__}."
-                )
+                error_and_exit(f"Invalid type for dockerfile. Expected string, got {type(dockerfile).__name__}.")
             output["dockerfile"] = dockerfile
 
         imagename = config.get("imagename")
@@ -129,7 +129,7 @@ class SSHConfig:
         ssh = SSHConfig.validate(ssh)
 
         if "hostname" not in ssh:
-            ssh["hostname"] = DEFAULT_HOSTNAME
+            error_and_exit('"hostname" not found in SSH config.')
 
         if "user" not in ssh:
             error_and_exit('"user" not found in SSH config.')
@@ -174,6 +174,7 @@ class CLIConfig:
     history_path: Path
     project_root: Path
     remote_path: str
+    sync: bool
     profiles: dict | None
     ssh: SSHConfig | None
     docker: DockerConfig | None
@@ -202,6 +203,7 @@ class CLIConfig:
 
         history_path = cls.load_history_path(config, project_root)
         remote_path = cls.load_remote_path(config, project_root)
+        sync = config.get("sync", True)
         ssh = SSHConfig.load(config)
         docker = DockerConfig.load(config)
 
@@ -210,6 +212,7 @@ class CLIConfig:
             profiles=profiles,
             project_root=project_root,
             remote_path=remote_path,
+            sync=sync,
             ssh=ssh,
             docker=docker,
         )

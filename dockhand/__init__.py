@@ -29,6 +29,14 @@ class DockerDefault:
         return str(value)
 
 
+class SyncDefault:
+    def __call__(self):
+        return cli_config.sync
+
+    def __str__(self):
+        return str(cli_config.sync)
+
+
 def profile_callback(profile: str | None):
     if profile is not None:
         cli_config.load_profile(profile)
@@ -56,7 +64,7 @@ def submit(
     dockerfile: Annotated[str, typer.Option(default_factory=DockerDefault("dockerfile"))],
     imagename: Annotated[str, typer.Option(default_factory=DockerDefault("imagename"))],
     gpus: Annotated[str, typer.Option(default_factory=DockerDefault("gpus"))],
-    sync: Annotated[bool, typer.Option(default_factory=DockerDefault("sync"))],
+    sync: Annotated[bool, typer.Option(default_factory=SyncDefault())],
     ports: Annotated[List[str], typer.Option("-p")] = [],
 ):
     """Build the image and run a container with the given command(s)."""
@@ -89,7 +97,7 @@ def run(
 def install(
     dockerfile: Annotated[str, typer.Option(default_factory=DockerDefault("dockerfile"))],
     imagename: Annotated[str, typer.Option(default_factory=DockerDefault("imagename"))],
-    sync: Annotated[bool, typer.Option(default_factory=DockerDefault("sync"))],
+    sync: Annotated[bool, typer.Option(default_factory=SyncDefault())],
 ):
     """Install (build) the Docker image."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")

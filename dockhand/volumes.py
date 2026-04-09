@@ -19,7 +19,7 @@ def _workdir_relative(containerpath: str, workdir: str) -> str:
 
 def _resolve_to_host(relative_path: str, config: DockerConfig) -> tuple[str, str] | None:
     """Map a workdir-relative path back to a host path and volume hostpath."""
-    workdir = config.workdir.rstrip("/")
+    workdir = config.containerworkdir.rstrip("/")
     for volume in config.volumes:
         containerpath = volume["containerpath"].rstrip("/")
         hostpath = volume["hostpath"].rstrip("/")
@@ -58,7 +58,7 @@ def execute_volumes(config: DockerConfig):
     for volume in config.volumes:
         hostpath = volume["hostpath"].rstrip("/")
         containerpath = volume["containerpath"]
-        vol_relative = _workdir_relative(containerpath, config.workdir)
+        vol_relative = _workdir_relative(containerpath, config.containerworkdir)
         typer.echo(f"\n{vol_relative}/:")
         exit_code, stdout = _ssh_find(hostpath)
         if exit_code != 0 or not stdout.strip():

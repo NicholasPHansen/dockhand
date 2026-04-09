@@ -1,4 +1,5 @@
 {
+  "sync": true,
   "ssh": {
     "hostname": "test.example.com",
     "user": "testuser",
@@ -7,7 +8,7 @@
   "docker": {
     "dockerfile": "Dockerfile",
     "imagename": "test:latest",
-    "workdir": "/workdir",
+    "containerworkdir": "/workdir",
     "volumes": []
   }
 }
