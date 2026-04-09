@@ -24,9 +24,5 @@ def get_client() -> Client:
     # Check if hostname is localhost or not set - use local client
     if cli_config.ssh is None or _is_localhost(cli_config.ssh.hostname):
         return LocalClient()
-    # Otherwise try bstat to detect if we're already on the remote machine
-    try:
-        subprocess.check_output("bstat", shell=True, stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return LocalClient()
-    except subprocess.CalledProcessError:
+    else:
         return SSHClient()

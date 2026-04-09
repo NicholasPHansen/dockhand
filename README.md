@@ -97,7 +97,6 @@ uv run dockhand resubmit --gpus '2'
 
 **Note:** If you've installed dockhand globally, you can omit `uv run`.
 
-
 ## Configuration
 
 Create a `.dockhand.json` file in your project root with Docker and SSH configuration.
@@ -129,8 +128,9 @@ For local development against localhost Docker daemon:
 ```
 
 Hostname detection:
+
 - If `ssh` config is missing → uses LocalClient
-- If `ssh.hostname` is `localhost` or `127.0.0.1` → uses LocalClient
+- If `ssh.hostname` resolves to localhost or `127.0.0.1` → uses LocalClient
 - Otherwise → uses SSHClient
 
 ### SSH Configuration
@@ -172,9 +172,11 @@ To run Docker commands on a remote machine, configure SSH:
 ```
 
 **Top-level options:**
+
 - **sync**: Whether to rsync local code before building (default: true)
 
 **Docker sub-config options:**
+
 - **dockerfile**: Path to the Dockerfile (required)
 - **imagename**: Docker image name (required)
 - **volumes**: List of volume mounts (required but can be empty list)
@@ -266,15 +268,16 @@ uv run dockhand --profile prod submit 'python train.py'
 ## Local vs Remote
 
 The client type is determined by:
+
 1. **If no SSH config** → LocalClient (run commands locally)
-2. **If hostname is `localhost` or `127.0.0.1`** → LocalClient (run commands locally)
+2. **If hostname resolves to localhost or `127.0.0.1`** → LocalClient (run commands locally)
 3. **Otherwise** → SSHClient (run commands via SSH)
-4. **Fallback** → If on the remote machine already, `bstat` detection can be used
 
 This allows:
-- Local development against localhost Docker
-- Remote execution via SSH
-- Automatic detection when running directly on the remote machine
+
+- Local development against localhost Docker daemon
+- Local hostname resolution (e.g., `mycomputer.local` resolving to `127.0.0.1`)
+- Remote execution via SSH to a different host
 
 ## Requirements
 
