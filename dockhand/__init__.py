@@ -9,6 +9,7 @@ from dockhand.download import execute_download
 from dockhand.history import execute_history
 from dockhand.manage import execute_logs, execute_remove, execute_stats, execute_stop
 from dockhand.run import execute_resubmit, execute_run, execute_submit
+from dockhand.tunnel import execute_tunnel
 from dockhand.volumes import execute_volumes
 
 __version__ = "0.1.0"
@@ -56,10 +57,20 @@ def submit(
     imagename: Annotated[str, typer.Option(default_factory=DockerDefault("imagename"))],
     gpus: Annotated[str, typer.Option(default_factory=DockerDefault("gpus"))],
     sync: Annotated[bool, typer.Option(default_factory=DockerDefault("sync"))],
+    ports: Annotated[List[str], typer.Option("-p")] = [],
 ):
     """Build the image and run a container with the given command(s)."""
-    cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_submit(cli_config.docker, commands, sync=sync, dockerfile=dockerfile, imagename=imagename, gpus=gpus)
+    msg = f"docker requires a Docker configuration in '{CONFIG_FILENAME}'"
+    cli_config.check_docker(msg=msg)
+    execute_submit(
+        cli_config.docker,
+        commands,
+        sync=sync,
+        dockerfile=dockerfile,
+        imagename=imagename,
+        gpus=gpus,
+        ports=ports or None,
+    )
 
 
 @cli.command()
@@ -67,10 +78,11 @@ def run(
     commands: List[str],
     imagename: Annotated[str, typer.Option(default_factory=DockerDefault("imagename"))],
     gpus: Annotated[str, typer.Option(default_factory=DockerDefault("gpus"))],
+    ports: Annotated[List[str], typer.Option("-p")] = [],
 ):
     """Run a container from an already-built image."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_run(cli_config.docker, commands, imagename=imagename, gpus=gpus)
+    execute_run(cli_config.docker, commands, imagename=imagename, gpus=gpus, ports=ports or None)
 
 
 @cli.command()
@@ -180,6 +192,18 @@ def remove(
     """Remove container(s) (defaults to last run container). Optionally remove from history."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     execute_remove(cli_config.docker, container_ids=container_ids, from_history=from_history)
+
+
+@cli.command()
+def tunnel(
+    container_id: str | None = None,
+    ports: Annotated[List[str], typer.Option("-p")] = [],
+):
+    """Forward docker container ports to localhost via SSH tunnel.
+
+    Defaults to ports from the last (or specified) run. Use -p to override."""
+    cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
+    execute_tunnel(container_id=container_id, ports=ports or None)
 
 
 if __name__ == "__main__":

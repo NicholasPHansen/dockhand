@@ -28,7 +28,13 @@ def save_history(history: list[dict]):
     path.write_text(json.dumps(history))
 
 
-def add_to_history(config: DockerConfig, container_id: str, commands: List[str], branch: str | None = None):
+def add_to_history(
+    config: DockerConfig,
+    container_id: str,
+    commands: List[str],
+    branch: str | None = None,
+    ports: list[str] | None = None,
+):
     """Add a container run to the history file."""
     history = load_history()
     _d = {
@@ -37,6 +43,7 @@ def add_to_history(config: DockerConfig, container_id: str, commands: List[str],
         "volumes": config.volumes,
         "imagename": config.imagename,
         "commands": commands,
+        "ports": ports,
     }
     if branch is not None:
         _d["branch"] = branch

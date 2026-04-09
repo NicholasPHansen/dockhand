@@ -17,10 +17,12 @@ def execute_run(
     commands: List[str],
     imagename: str | None = None,
     gpus: str | None = None,
+    ports: list[str] | None = None,
 ):
     """Run a container from an already-built image."""
     imagename = imagename or config.imagename
     gpus = gpus if gpus is not None else config.gpus
+    effective_ports = ports if ports is not None else config.ports
 
     volumes = []
     if config.volumes is not None:
@@ -30,9 +32,9 @@ def execute_run(
     if gpus is not None:
         gpu_flags = [f"--gpus {gpus}"]
 
-    ports = []
-    if config.ports is not None:
-        ports = [f"-p {mapping}" for mapping in config.ports]
+    port_flags = []
+    if effective_ports is not None:
+        port_flags = [f"-p {mapping}" for mapping in effective_ports]
 
     cmd = " ".join(
         [
@@ -43,7 +45,7 @@ def execute_run(
             "-d",
             *volumes,
             *gpu_flags,
-            *ports,
+            *port_flags,
             imagename,
             *commands,
         ]
@@ -61,7 +63,7 @@ def execute_run(
     container_id = stdout[:12]
     with Repo(cli_config.project_root) as repo:
         branch = repo.active_branch.name
-    add_to_history(config, container_id, commands, branch)
+    add_to_history(config, container_id, commands, branch, ports=effective_ports)
 
 
 def execute_submit(
@@ -71,6 +73,7 @@ def execute_submit(
     dockerfile: str | None = None,
     imagename: str | None = None,
     gpus: str | None = None,
+    ports: list[str] | None = None,
 ):
     """Build the image and run a container with the given command(s)."""
     dockerfile = dockerfile or config.dockerfile
@@ -78,7 +81,7 @@ def execute_submit(
     gpus = gpus if gpus is not None else config.gpus
 
     execute_build(config, sync, dockerfile=dockerfile, imagename=imagename)
-    execute_run(config, commands, imagename=imagename, gpus=gpus)
+    execute_run(config, commands, imagename=imagename, gpus=gpus, ports=ports)
 
 
 def execute_resubmit(docker_config: DockerConfig, resubmit_config: DockerResubmitConfig):
