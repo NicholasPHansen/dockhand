@@ -5,6 +5,8 @@ A CLI tool for managing Docker containers on remote machines. Build, run, and ma
 ## Features
 
 - **Remote Docker Management**: Build and run Docker containers on a remote machine via SSH
+- **Local or Remote**: Automatically detect localhost vs remote, or explicitly configure
+- **Port Forwarding**: Establish SSH tunnels to access container ports locally
 - **File Syncing**: Automatically sync your local code to the remote before building
 - **Volume Management**: Mount local directories into containers and download files back
 - **Container History**: Track all container runs with full configuration snapshots
@@ -37,7 +39,7 @@ pip install dockhand
 
 ## Usage
 
-All commands work with the same `.dtu_hpc.json` configuration file format. See [Configuration](#configuration) below.
+All commands work with the same `.dockhand.json` configuration file format. See [Configuration](#configuration) below.
 
 ### Available Commands
 
@@ -52,6 +54,7 @@ All commands work with the same `.dtu_hpc.json` configuration file format. See [
 - **volumes**: List files in docker-mounted volumes
 - **download**: Download a file from a docker volume
 - **resubmit**: Resubmit a previous Docker run with optional overrides
+- **tunnel**: Forward container ports to localhost via SSH tunnel
 
 ### Examples
 
@@ -59,11 +62,19 @@ All commands work with the same `.dtu_hpc.json` configuration file format. See [
 # Build image and run a container
 uv run dockhand submit --gpus all 'python train.py --epochs 10'
 
+# Run with explicit port mappings
+uv run dockhand submit -p 8080:8080 -p 6006:6006 'python train.py'
+
 # Run a container from an already-built image
 uv run dockhand run 'python train.py --epochs 20'
 
 # Build image without running
 uv run dockhand install --dockerfile Dockerfile.prod
+
+# Forward container ports to localhost
+uv run dockhand tunnel
+# or specify custom ports
+uv run dockhand tunnel -p 8080:8080
 
 # Check logs from the last container
 uv run dockhand logs --n 50
@@ -89,7 +100,7 @@ uv run dockhand resubmit --gpus '2'
 
 ## Configuration
 
-Create a `.dtu_hpc.json` file in your project root with Docker and SSH configuration. All options in the configuration are optional.
+Create a `.dockhand.json` file in your project root with Docker and SSH configuration.
 
 ### Minimal Configuration
 
@@ -97,10 +108,30 @@ Create a `.dtu_hpc.json` file in your project root with Docker and SSH configura
 {
     "docker": {
         "dockerfile": "Dockerfile",
-        "imagename": "my-image"
+        "imagename": "my-image",
+        "volumes": []
     }
 }
 ```
+
+### Local Docker (localhost)
+
+For local development against localhost Docker daemon:
+
+```json
+{
+    "docker": {
+        "dockerfile": "Dockerfile",
+        "imagename": "my-image",
+        "volumes": []
+    }
+}
+```
+
+Hostname detection:
+- If `ssh` config is missing → uses LocalClient
+- If `ssh.hostname` is `localhost` or `127.0.0.1` → uses LocalClient
+- Otherwise → uses SSHClient
 
 ### SSH Configuration
 
@@ -112,16 +143,17 @@ To run Docker commands on a remote machine, configure SSH:
         "user": "your_username",
         "identityfile": "/path/to/private/key",
         "hostname": "remote.example.com"
-    }
+    },
+    "docker": { ... }
 }
 ```
-
-Default hostname is `login1.hpc.dtu.dk`.
 
 ### Docker Configuration
 
 ```json
 {
+    "sync": true,
+    "ssh": { ... },
     "docker": {
         "dockerfile": "Dockerfile",
         "imagename": "my-image",
@@ -134,19 +166,21 @@ Default hostname is `login1.hpc.dtu.dk`.
         ],
         "ports": ["8080:80"],
         "gpus": "all",
-        "sync": true,
-        "workdir": "/"
+        "containerworkdir": "/"
     }
 }
 ```
 
+**Top-level options:**
+- **sync**: Whether to rsync local code before building (default: true)
+
+**Docker sub-config options:**
 - **dockerfile**: Path to the Dockerfile (required)
 - **imagename**: Docker image name (required)
 - **volumes**: List of volume mounts (required but can be empty list)
 - **ports**: Port mappings (optional)
 - **gpus**: GPU configuration for `docker run` (optional)
-- **sync**: Whether to rsync local code before building (default: true)
-- **workdir**: Working directory in container for path resolution (default: /)
+- **containerworkdir**: Working directory in container for path resolution (default: /)
 
 ### Profiles
 
@@ -184,6 +218,7 @@ uv run dockhand --profile prod submit 'python train.py'
 
 ```json
 {
+    "sync": true,
     "ssh": {
         "user": "myuser",
         "identityfile": "~/.ssh/id_rsa",
@@ -206,8 +241,7 @@ uv run dockhand --profile prod submit 'python train.py'
         ],
         "ports": ["6006:6006"],
         "gpus": "all",
-        "sync": true,
-        "workdir": "/app"
+        "containerworkdir": "/app"
     },
     "remote_path": "/home/myuser/projects/my-app",
     "profiles": {
@@ -222,16 +256,25 @@ uv run dockhand --profile prod submit 'python train.py'
 
 ## How It Works
 
-1. **Build** (`submit`/`install`): Optionally syncs local code via rsync, then runs `docker build` on the remote
+1. **Build** (`submit`/`install`): Optionally syncs local code via rsync, then runs `docker build`
 2. **Run** (`submit`/`run`): Executes `docker run` with volumes, GPU flags, and port mappings
-3. **History**: Stores container IDs and configurations in `.dtu_docker_history.json`
-4. **Resubmit**: Looks up a previous run in history and re-runs with optional overrides
-5. **Download**: Maps workdir-relative paths to host paths and uses rsync to download files
+3. **Port Forwarding** (`tunnel`): Establishes SSH local port forwards for container ports
+4. **History**: Stores container IDs and configurations in `.dockhand_history.json`
+5. **Resubmit**: Looks up a previous run in history and re-runs with optional overrides
+6. **Download**: Maps containerworkdir-relative paths to host paths and uses rsync to download files
 
 ## Local vs Remote
 
-- **On a remote machine with SSH**: Commands run via SSH (default)
-- **On the Docker host directly**: Commands run locally (detected automatically)
+The client type is determined by:
+1. **If no SSH config** → LocalClient (run commands locally)
+2. **If hostname is `localhost` or `127.0.0.1`** → LocalClient (run commands locally)
+3. **Otherwise** → SSHClient (run commands via SSH)
+4. **Fallback** → If on the remote machine already, `bstat` detection can be used
+
+This allows:
+- Local development against localhost Docker
+- Remote execution via SSH
+- Automatic detection when running directly on the remote machine
 
 ## Requirements
 
