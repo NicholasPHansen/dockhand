@@ -4,10 +4,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import List
 
-from git import Repo
-
-from dockhand.constants import CONFIG_FILENAME
-from dockhand.constants import HISTORY_FILENAME
+from dockhand.constants import CONFIG_FILENAME, HISTORY_FILENAME
 from dockhand.error import error_and_exit
 
 DEFAULT_HOSTNAME = "login1.hpc.dtu.dk"
@@ -79,7 +76,7 @@ class DockerConfig:
         if dockerfile is not None:
             if not isinstance(dockerfile, str):
                 error_and_exit(
-                    f"Invalid type for compose_file option in docker config. Expected string but got {type(dockerfile)}."
+                    f"Invalid type for dockerfile. Expected string, got {type(dockerfile).__name__}."
                 )
             output["dockerfile"] = dockerfile
 
@@ -111,12 +108,9 @@ class DockerConfig:
         if gpus is not None:
             if not isinstance(gpus, str):
                 error_and_exit(
-                    f"Invalid type for compose_file option in docker config. Expected string but got {type(gpus)}."
+                    f"Invalid type for gpus option in docker config. Expected string but got {type(gpus).__name__}."
                 )
-            output["gpus"] = [
-                DockerVolumesConfig(hostpath=v.hostpath, containerpath=v.containerpath, permissions=v.permissions)
-                for gpu in gpus
-            ]
+            output["gpus"] = gpus
         return output
 
 
@@ -178,7 +172,6 @@ class SSHConfig:
 @dataclasses.dataclass
 class CLIConfig:
     history_path: Path
-    modules: list[str] | None
     project_root: Path
     remote_path: str
     profiles: dict | None
@@ -208,14 +201,12 @@ class CLIConfig:
             error_and_exit(f"Invalid type for profiles option in config. Expected dictionary but got {type(profiles)}.")
 
         history_path = cls.load_history_path(config, project_root)
-        modules = cls.load_modules(config)
         remote_path = cls.load_remote_path(config, project_root)
         ssh = SSHConfig.load(config)
         docker = DockerConfig.load(config)
 
         return cls(
             history_path=history_path,
-            modules=modules,
             profiles=profiles,
             project_root=project_root,
             remote_path=remote_path,
@@ -252,20 +243,6 @@ class CLIConfig:
         return project_root / HISTORY_FILENAME
 
     @classmethod
-    def load_modules(cls, config: dict) -> list[str] | None:
-        if "modules" in config:
-            modules = config["modules"]
-            if not isinstance(modules, list):
-                error_and_exit(f"Invalid type for modules option in config. Expected list but got {type(modules)}.")
-            for i, module in enumerate(modules):
-                if not isinstance(module, str):
-                    error_and_exit(
-                        f"Invalid type for module at index {i} in config. Expected string but got {type(module)}."
-                    )
-            return modules
-        return None
-
-    @classmethod
     def load_remote_path(cls, config: dict, project_root: Path) -> str:
         if "remote_path" in config:
             return config["remote_path"]
@@ -290,9 +267,6 @@ class CLIConfig:
 
         if "history_path" in profile:
             self.history_path = CLIConfig.load_history_path(profile, self.project_root)
-
-        if "modules" in profile:
-            self.modules = profile["modules"]
 
         if "remote_path" in profile:
             self.remote_path = profile["remote_path"]

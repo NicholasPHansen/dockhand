@@ -2,9 +2,7 @@ import subprocess
 
 import typer
 from git import Repo
-from rich.progress import Progress
-from rich.progress import SpinnerColumn
-from rich.progress import TextColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.prompt import Confirm
 
 from dockhand.config import cli_config

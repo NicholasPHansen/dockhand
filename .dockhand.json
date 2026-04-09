@@ -1,0 +1,13 @@
+{
+  "ssh": {
+    "hostname": "test.example.com",
+    "user": "testuser",
+    "identityfile": "~/.ssh/id_rsa"
+  },
+  "docker": {
+    "dockerfile": "Dockerfile",
+    "imagename": "test:latest",
+    "workdir": "/workdir",
+    "volumes": []
+  }
+}

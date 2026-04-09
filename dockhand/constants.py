@@ -1,3 +1,3 @@
-CONFIG_FILENAME = ".dtu_hpc.json"
+CONFIG_FILENAME = ".dockhand.json"
 
-HISTORY_FILENAME = ".dtu_hpc_history.json"
+HISTORY_FILENAME = ".dockhand_history.json"

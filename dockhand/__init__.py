@@ -1,22 +1,15 @@
-from typing import List
+from typing import Annotated, List
 
 import typer
-from typing_extensions import Annotated
 
-from dockhand.config import DockerResubmitConfig
-from dockhand.config import cli_config
+from dockhand.build import execute_build
+from dockhand.config import DockerResubmitConfig, cli_config
 from dockhand.constants import CONFIG_FILENAME
-from dockhand.docker import execute_docker_build
-from dockhand.docker import execute_docker_download
-from dockhand.docker import execute_docker_history
-from dockhand.docker import execute_docker_logs
-from dockhand.docker import execute_docker_remove
-from dockhand.docker import execute_docker_resubmit
-from dockhand.docker import execute_docker_run
-from dockhand.docker import execute_docker_stats
-from dockhand.docker import execute_docker_stop
-from dockhand.docker import execute_docker_submit
-from dockhand.docker import execute_docker_volumes
+from dockhand.download import execute_download
+from dockhand.history import execute_history
+from dockhand.manage import execute_logs, execute_remove, execute_stats, execute_stop
+from dockhand.run import execute_resubmit, execute_run, execute_submit
+from dockhand.volumes import execute_volumes
 
 __version__ = "0.1.0"
 
@@ -66,7 +59,7 @@ def submit(
 ):
     """Build the image and run a container with the given command(s)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_docker_submit(cli_config.docker, commands, sync=sync, dockerfile=dockerfile, imagename=imagename, gpus=gpus)
+    execute_submit(cli_config.docker, commands, sync=sync, dockerfile=dockerfile, imagename=imagename, gpus=gpus)
 
 
 @cli.command()
@@ -77,7 +70,7 @@ def run(
 ):
     """Run a container from an already-built image."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_docker_run(cli_config.docker, commands, imagename=imagename, gpus=gpus)
+    execute_run(cli_config.docker, commands, imagename=imagename, gpus=gpus)
 
 
 @cli.command()
@@ -88,7 +81,7 @@ def install(
 ):
     """Install (build) the Docker image."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_docker_build(cli_config.docker, sync=sync, dockerfile=dockerfile, imagename=imagename)
+    execute_build(cli_config.docker, sync=sync, dockerfile=dockerfile, imagename=imagename)
 
 
 @cli.command()
@@ -100,35 +93,35 @@ def logs(
 ):
     """Show logs from a container (defaults to last run container)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_docker_logs(cli_config.docker, container_id=container_id, imagename=imagename, all=all, n=n)
+    execute_logs(cli_config.docker, container_id=container_id, imagename=imagename, all=all, n=n)
 
 
 @cli.command()
 def stop(container_id: str | None = None):
     """Stop a running container (defaults to last run container)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_docker_stop(cli_config.docker, container_id=container_id)
+    execute_stop(cli_config.docker, container_id=container_id)
 
 
 @cli.command()
 def jobs():
     """List running containers (docker ps)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_docker_stats(cli_config.docker)
+    execute_stats(cli_config.docker)
 
 
 @cli.command()
 def history():
     """Show history of past Docker runs."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_docker_history(cli_config.docker)
+    execute_history(cli_config.docker)
 
 
 @cli.command()
 def volumes():
     """List files in docker-mounted volumes using workdir-relative paths."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_docker_volumes(cli_config.docker)
+    execute_volumes(cli_config.docker)
 
 
 @cli.command()
@@ -151,12 +144,12 @@ def download(
     Files are downloaded preserving their directory structure relative to project root."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     if list_only:
-        execute_docker_volumes(cli_config.docker)
+        execute_volumes(cli_config.docker)
         return
     if path is None:
         typer.echo("Error: Missing argument 'PATH'. Use --list to see available files.")
         raise typer.Exit(1)
-    execute_docker_download(cli_config.docker, path=path, local_path=local_path)
+    execute_download(cli_config.docker, path=path, local_path=local_path)
 
 
 @cli.command()
@@ -176,7 +169,7 @@ def resubmit(
         imagename=imagename,
         gpus=gpus,
     )
-    execute_docker_resubmit(cli_config.docker, config)
+    execute_resubmit(cli_config.docker, config)
 
 
 @cli.command()
@@ -186,7 +179,7 @@ def remove(
 ):
     """Remove container(s) (defaults to last run container). Optionally remove from history."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_docker_remove(cli_config.docker, container_ids=container_ids, from_history=from_history)
+    execute_remove(cli_config.docker, container_ids=container_ids, from_history=from_history)
 
 
 if __name__ == "__main__":
