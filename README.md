@@ -1,6 +1,16 @@
-# dockhand
+# Dockhand
+
+![](media/Gemini_Generated_Image_i700fvi700fvi700.png)
 
 A CLI tool for managing Docker containers on remote machines. Build, run, and manage Docker containers with a single command from your local machine.
+
+**Why this project?**
+
+Managing Docker workloads across multiple machines is painful: keeping code in sync, remembering which version runs where, handling build/run/debug cycles remotely.
+
+`dockhand` solves this by letting you manage everything from your laptop - code syncs automatically, builds happen on the remote, and you track history locally, and after running you can download results back. No more juggling multiple git repos or SSH sessions.
+
+This project is *heavily* inspired by the awesome work from @ChrisFugl's [DTU-HPC-CLI](https://github.com/ChrisFugl/DTU-HPC-CLI). 
 
 ## Features
 
@@ -25,7 +35,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 Then clone and sync:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/dockhand.git
+git clone https://github.com/nicholasphansen/dockhand.git
 cd dockhand
 uv sync
 uv run dockhand --help
