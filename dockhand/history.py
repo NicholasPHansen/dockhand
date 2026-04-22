@@ -34,6 +34,7 @@ def add_to_history(
     commands: List[str],
     branch: str | None = None,
     ports: list[str] | None = None,
+    host: str | None = None,
 ):
     """Add a container run to the history file."""
     history = load_history()
@@ -47,7 +48,10 @@ def add_to_history(
     }
     if branch is not None:
         _d["branch"] = branch
-    history.append({"config": _d, "container_id": container_id, "timestamp": time.time()})
+    entry = {"config": _d, "container_id": container_id, "timestamp": time.time()}
+    if host is not None:
+        entry["host"] = host
+    history.append(entry)
     save_history(history)
 
 
@@ -62,6 +66,7 @@ def execute_history(config: DockerConfig):
     table = Table(title="Docker Run Commands", show_lines=True)
     table.add_column("Timestamp")
     table.add_column("Container ID(s)")
+    table.add_column("Host")
     table.add_column("Branch")
     table.add_column("Dockerfile")
     table.add_column("GPU(s)")
@@ -72,6 +77,7 @@ def execute_history(config: DockerConfig):
     for entry in history:
         timestamp = datetime.fromtimestamp(entry["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
         container_id = entry["container_id"]
+        host = entry.get("host") or "-"
         _config = entry["config"]
         branch = _config.get("branch") or "-"
         dockerfile = _config["dockerfile"]
@@ -81,7 +87,7 @@ def execute_history(config: DockerConfig):
         # support both old "arguments" key and new "commands" key
         cmds = _config.get("commands") or _config.get("arguments") or []
         commands_str = " ".join(cmds)
-        table.add_row(str(timestamp), container_id, branch, dockerfile, gpus, volumes, imagename, commands_str)
+        table.add_row(str(timestamp), container_id, host, branch, dockerfile, gpus, volumes, imagename, commands_str)
 
     console = Console()
     console.print(table)

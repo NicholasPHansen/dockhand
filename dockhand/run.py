@@ -63,7 +63,8 @@ def execute_run(
     container_id = stdout[:12]
     with Repo(cli_config.project_root) as repo:
         branch = repo.active_branch.name
-    add_to_history(config, container_id, commands, branch, ports=effective_ports)
+    host = cli_config.ssh.hostname if cli_config.ssh else "localhost"
+    add_to_history(config, container_id, commands, branch, ports=effective_ports, host=host)
 
 
 def execute_submit(
