@@ -3,12 +3,13 @@ from typing import Annotated, List
 import typer
 
 from dockhand.build import execute_build
+from dockhand.client import get_client
 from dockhand.config import DockerResubmitConfig, cli_config
 from dockhand.constants import CONFIG_FILENAME
 from dockhand.download import execute_download
 from dockhand.history import execute_history
 from dockhand.manage import execute_logs, execute_remove, execute_stats, execute_stop
-from dockhand.run import execute_resubmit, execute_run, execute_submit
+from dockhand.run import execute_queued_run, execute_resubmit, execute_run, execute_submit
 from dockhand.tunnel import execute_tunnel
 from dockhand.volumes import execute_volumes
 
@@ -66,6 +67,7 @@ def submit(
     gpus: Annotated[str, typer.Option(default_factory=DockerDefault("gpus"))],
     sync: Annotated[bool, typer.Option(default_factory=SyncDefault())],
     ports: Annotated[List[str], typer.Option("-p")] = [],
+    urgent: Annotated[bool, typer.Option("--urgent", help="Move to front of queue (queue mode only).")] = False,
 ):
     """Build the image and run a container with the given command(s)."""
     msg = f"docker requires a Docker configuration in '{CONFIG_FILENAME}'"
@@ -78,6 +80,7 @@ def submit(
         imagename=imagename,
         gpus=gpus,
         ports=ports or None,
+        urgent=urgent,
     )
 
 
@@ -87,10 +90,16 @@ def run(
     imagename: Annotated[str, typer.Option(default_factory=DockerDefault("imagename"))],
     gpus: Annotated[str, typer.Option(default_factory=DockerDefault("gpus"))],
     ports: Annotated[List[str], typer.Option("-p")] = [],
+    urgent: Annotated[bool, typer.Option("--urgent", help="Move to front of queue (queue mode only).")] = False,
 ):
     """Run a container from an already-built image."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_run(cli_config.docker, commands, imagename=imagename, gpus=gpus, ports=ports or None)
+    if cli_config.queue.enabled:
+        execute_queued_run(
+            cli_config.docker, commands, imagename=imagename, gpus=gpus, ports=ports or None, urgent=urgent
+        )
+    else:
+        execute_run(cli_config.docker, commands, imagename=imagename, gpus=gpus, ports=ports or None)
 
 
 @cli.command()
@@ -107,20 +116,36 @@ def install(
 @cli.command()
 def logs(
     imagename: Annotated[str, typer.Option(default_factory=DockerDefault("imagename"))],
-    container_id: str | None = None,
+    id: Annotated[
+        str | None,
+        typer.Argument(help="Job ID (queue mode) or container ID (direct mode). Defaults to last job/container."),
+    ] = None,
     all: bool = False,
     n: int | None = None,
 ):
-    """Show logs from a container (defaults to last run container)."""
+    """Show logs from a job or container (defaults to last)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_logs(cli_config.docker, container_id=container_id, imagename=imagename, all=all, n=n)
+    if cli_config.queue.enabled:
+        job_id = int(id) if id is not None else None
+        execute_logs(cli_config.docker, job_id=job_id, container_id=None, imagename=imagename, all=all, n=n)
+    else:
+        execute_logs(cli_config.docker, job_id=None, container_id=id, imagename=imagename, all=all, n=n)
 
 
 @cli.command()
-def stop(container_id: str | None = None):
-    """Stop a running container (defaults to last run container)."""
+def stop(
+    id: Annotated[
+        str | None,
+        typer.Argument(help="Job ID (queue mode) or container ID (direct mode). Defaults to last job/container."),
+    ] = None,
+):
+    """Stop a running job/container or remove a queued job (defaults to last)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_stop(cli_config.docker, container_id=container_id)
+    if cli_config.queue.enabled:
+        job_id = int(id) if id is not None else None
+        execute_stop(cli_config.docker, job_id=job_id)
+    else:
+        execute_stop(cli_config.docker, container_id=id)
 
 
 @cli.command()
@@ -131,6 +156,41 @@ def jobs():
 
 
 @cli.command()
+def urgent(
+    id: Annotated[
+        str | None,
+        typer.Argument(help="Job ID to promote to the front of the queue. Defaults to last queued job."),
+    ] = None,
+):
+    """Promote a queued job to the front of the queue."""
+    cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
+    if not cli_config.queue.enabled:
+        typer.echo("Queue mode is not enabled. Set queue.enabled=true in your config.")
+        raise typer.Exit(1)
+
+    from dockhand.queue import ts_make_urgent
+
+    if id is None:
+        from dockhand.history import load_history
+
+        history = load_history()
+        queued = [e for e in history if e.get("ts_job_id") is not None]
+        if not queued:
+            typer.echo("No queued job history found. Provide a job ID.")
+            raise typer.Exit(1)
+        job_id = queued[-1]["ts_job_id"]
+    else:
+        job_id = int(id)
+
+    with get_client() as client:
+        if ts_make_urgent(client, job_id, cwd=cli_config.remote_path):
+            typer.echo(f"Job {job_id} moved to front of queue.")
+        else:
+            typer.echo(f"Failed to promote job {job_id}. It may have already started or finished.")
+            raise typer.Exit(1)
+
+
+@cli.command()
 def history():
     """Show history of past Docker runs."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
@@ -138,10 +198,15 @@ def history():
 
 
 @cli.command()
-def volumes():
-    """List files in docker-mounted volumes using workdir-relative paths."""
+def volumes(
+    depth: Annotated[
+        int | None,
+        typer.Option("--depth", help="Maximum directory depth to display."),
+    ] = None,
+):
+    """List files in docker-mounted volumes as a tree."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_volumes(cli_config.docker)
+    execute_volumes(cli_config.docker, depth=depth)
 
 
 @cli.command()
@@ -158,13 +223,17 @@ def download(
         bool,
         typer.Option("--list", help="List files in docker-mounted volumes (same as volumes)"),
     ] = False,
+    depth: Annotated[
+        int | None,
+        typer.Option("--depth", help="Maximum directory depth to display (only applies with --list)."),
+    ] = None,
 ):
     """Download a file from a docker volume by its workdir-relative path.
 
     Files are downloaded preserving their directory structure relative to project root."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     if list_only:
-        execute_volumes(cli_config.docker)
+        execute_volumes(cli_config.docker, depth=depth)
         return
     if path is None:
         typer.echo("Error: Missing argument 'PATH'. Use --list to see available files.")
@@ -174,7 +243,10 @@ def download(
 
 @cli.command()
 def resubmit(
-    container_id: str | None = None,
+    id: Annotated[
+        str | None,
+        typer.Argument(help="Job ID (queue mode) or container ID (direct mode). Defaults to last."),
+    ] = None,
     commands: List[str] | None = None,
     dockerfile: str | None = None,
     imagename: str | None = None,
@@ -183,7 +255,7 @@ def resubmit(
     """Resubmit a previous Docker run (defaults to latest). Optionally with new parameters."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     config = DockerResubmitConfig(
-        container_id=container_id,
+        container_id=id,
         commands=commands,
         dockerfile=dockerfile,
         imagename=imagename,
@@ -194,12 +266,19 @@ def resubmit(
 
 @cli.command()
 def remove(
-    container_ids: Annotated[List[str], typer.Argument()] = None,
+    ids: Annotated[
+        List[str],
+        typer.Argument(help="Job IDs (queue mode) or container IDs (direct mode). Defaults to last."),
+    ] = None,
     from_history: bool = False,
 ):
-    """Remove container(s) (defaults to last run container). Optionally remove from history."""
+    """Remove job(s) from queue or docker container(s) (defaults to last)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_remove(cli_config.docker, container_ids=container_ids, from_history=from_history)
+    if cli_config.queue.enabled:
+        job_ids = [int(i) for i in ids] if ids else None
+        execute_remove(cli_config.docker, job_ids=job_ids, from_history=from_history)
+    else:
+        execute_remove(cli_config.docker, container_ids=ids, from_history=from_history)
 
 
 @cli.command()

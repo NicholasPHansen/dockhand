@@ -30,11 +30,12 @@ def save_history(history: list[dict]):
 
 def add_to_history(
     config: DockerConfig,
-    container_id: str,
+    container_id: str | None,
     commands: List[str],
     branch: str | None = None,
     ports: list[str] | None = None,
     host: str | None = None,
+    ts_job_id: int | None = None,
 ):
     """Add a container run to the history file."""
     history = load_history()
@@ -51,8 +52,19 @@ def add_to_history(
     entry = {"config": _d, "container_id": container_id, "timestamp": time.time()}
     if host is not None:
         entry["host"] = host
+    if ts_job_id is not None:
+        entry["ts_job_id"] = ts_job_id
     history.append(entry)
     save_history(history)
+
+
+def get_history_entry_by_job_id(ts_job_id: int) -> dict | None:
+    """Look up the most recent history entry with a given ts job ID."""
+    history = load_history()
+    for entry in reversed(history):
+        if entry.get("ts_job_id") == ts_job_id:
+            return entry
+    return None
 
 
 def execute_history(config: DockerConfig):
@@ -63,9 +75,13 @@ def execute_history(config: DockerConfig):
 
     history = load_history()
 
+    has_job_ids = any("ts_job_id" in entry for entry in history)
+
     table = Table(title="Docker Run Commands", show_lines=True)
     table.add_column("Timestamp")
-    table.add_column("Container ID(s)")
+    if has_job_ids:
+        table.add_column("Job ID")
+    table.add_column("Container ID")
     table.add_column("Host")
     table.add_column("Branch")
     table.add_column("Dockerfile")
@@ -76,7 +92,7 @@ def execute_history(config: DockerConfig):
 
     for entry in history:
         timestamp = datetime.fromtimestamp(entry["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
-        container_id = entry["container_id"]
+        container_id = entry.get("container_id") or "-"
         host = entry.get("host") or "-"
         _config = entry["config"]
         branch = _config.get("branch") or "-"
@@ -87,7 +103,11 @@ def execute_history(config: DockerConfig):
         # support both old "arguments" key and new "commands" key
         cmds = _config.get("commands") or _config.get("arguments") or []
         commands_str = " ".join(cmds)
-        table.add_row(str(timestamp), container_id, host, branch, dockerfile, gpus, volumes, imagename, commands_str)
+        row = [str(timestamp)]
+        if has_job_ids:
+            row.append(str(entry.get("ts_job_id", "-")))
+        row.extend([container_id, host, branch, dockerfile, gpus, volumes, imagename, commands_str])
+        table.add_row(*row)
 
     console = Console()
     console.print(table)
