@@ -27,6 +27,12 @@ def ts_list(client: Client, cwd: str) -> list[dict]:
     return _parse_ts_list(stdout)
 
 
+def ts_make_urgent(client: Client, job_id: int, cwd: str) -> bool:
+    """Move a queued job to the front of the queue. Returns True on success."""
+    returncode, _ = client.run(f"tsp -u {job_id}", cwd=cwd)
+    return returncode == 0
+
+
 def ts_remove(client: Client, job_id: int, cwd: str) -> bool:
     """Remove a pending job from the queue. Returns True on success."""
     returncode, _ = client.run(f"tsp -r {job_id}", cwd=cwd)

@@ -86,9 +86,10 @@ def execute_queued_run(
     imagename: str | None = None,
     gpus: str | None = None,
     ports: list[str] | None = None,
+    urgent: bool = False,
 ) -> int:
     """Submit a container run to the task spooler queue. Returns the ts job ID."""
-    from dockhand.queue import ts_submit
+    from dockhand.queue import ts_make_urgent, ts_submit
 
     imagename = imagename or config.imagename
     gpus = gpus if gpus is not None else config.gpus
@@ -100,9 +101,12 @@ def execute_queued_run(
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
             task = progress.add_task(description="Queuing job", total=None)
             ts_job_id = ts_submit(client, docker_cmd, cwd=cli_config.remote_path)
+            if urgent:
+                ts_make_urgent(client, ts_job_id, cwd=cli_config.remote_path)
             progress.update(task, completed=True)
 
-    typer.echo(f"Job queued with ID {ts_job_id}")
+    label = "urgent job" if urgent else "job"
+    typer.echo(f"Queued {label} with ID {ts_job_id}")
 
     host = cli_config.ssh.hostname if cli_config.ssh else "localhost"
     add_to_history(
@@ -125,6 +129,7 @@ def execute_submit(
     imagename: str | None = None,
     gpus: str | None = None,
     ports: list[str] | None = None,
+    urgent: bool = False,
 ):
     """Build the image and run a container (or queue it) with the given command(s)."""
     dockerfile = dockerfile or config.dockerfile
@@ -134,7 +139,7 @@ def execute_submit(
     execute_build(config, sync, dockerfile=dockerfile, imagename=imagename)
 
     if cli_config.queue.enabled:
-        execute_queued_run(config, commands, imagename=imagename, gpus=gpus, ports=ports)
+        execute_queued_run(config, commands, imagename=imagename, gpus=gpus, ports=ports, urgent=urgent)
     else:
         execute_run(config, commands, imagename=imagename, gpus=gpus, ports=ports)
 

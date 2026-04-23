@@ -3,12 +3,13 @@ from typing import Annotated, List
 import typer
 
 from dockhand.build import execute_build
+from dockhand.client import get_client
 from dockhand.config import DockerResubmitConfig, cli_config
 from dockhand.constants import CONFIG_FILENAME
 from dockhand.download import execute_download
 from dockhand.history import execute_history
 from dockhand.manage import execute_logs, execute_remove, execute_stats, execute_stop
-from dockhand.run import execute_resubmit, execute_run, execute_submit
+from dockhand.run import execute_queued_run, execute_resubmit, execute_run, execute_submit
 from dockhand.tunnel import execute_tunnel
 from dockhand.volumes import execute_volumes
 
@@ -66,6 +67,7 @@ def submit(
     gpus: Annotated[str, typer.Option(default_factory=DockerDefault("gpus"))],
     sync: Annotated[bool, typer.Option(default_factory=SyncDefault())],
     ports: Annotated[List[str], typer.Option("-p")] = [],
+    urgent: Annotated[bool, typer.Option("--urgent", help="Move to front of queue (queue mode only).")] = False,
 ):
     """Build the image and run a container with the given command(s)."""
     msg = f"docker requires a Docker configuration in '{CONFIG_FILENAME}'"
@@ -78,6 +80,7 @@ def submit(
         imagename=imagename,
         gpus=gpus,
         ports=ports or None,
+        urgent=urgent,
     )
 
 
@@ -87,10 +90,16 @@ def run(
     imagename: Annotated[str, typer.Option(default_factory=DockerDefault("imagename"))],
     gpus: Annotated[str, typer.Option(default_factory=DockerDefault("gpus"))],
     ports: Annotated[List[str], typer.Option("-p")] = [],
+    urgent: Annotated[bool, typer.Option("--urgent", help="Move to front of queue (queue mode only).")] = False,
 ):
     """Run a container from an already-built image."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_run(cli_config.docker, commands, imagename=imagename, gpus=gpus, ports=ports or None)
+    if cli_config.queue.enabled:
+        execute_queued_run(
+            cli_config.docker, commands, imagename=imagename, gpus=gpus, ports=ports or None, urgent=urgent
+        )
+    else:
+        execute_run(cli_config.docker, commands, imagename=imagename, gpus=gpus, ports=ports or None)
 
 
 @cli.command()
@@ -144,6 +153,41 @@ def jobs():
     """List running containers (docker ps)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     execute_stats(cli_config.docker)
+
+
+@cli.command()
+def urgent(
+    id: Annotated[
+        str | None,
+        typer.Argument(help="Job ID to promote to the front of the queue. Defaults to last queued job."),
+    ] = None,
+):
+    """Promote a queued job to the front of the queue."""
+    cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
+    if not cli_config.queue.enabled:
+        typer.echo("Queue mode is not enabled. Set queue.enabled=true in your config.")
+        raise typer.Exit(1)
+
+    from dockhand.queue import ts_make_urgent
+
+    if id is None:
+        from dockhand.history import load_history
+
+        history = load_history()
+        queued = [e for e in history if e.get("ts_job_id") is not None]
+        if not queued:
+            typer.echo("No queued job history found. Provide a job ID.")
+            raise typer.Exit(1)
+        job_id = queued[-1]["ts_job_id"]
+    else:
+        job_id = int(id)
+
+    with get_client() as client:
+        if ts_make_urgent(client, job_id, cwd=cli_config.remote_path):
+            typer.echo(f"Job {job_id} moved to front of queue.")
+        else:
+            typer.echo(f"Failed to promote job {job_id}. It may have already started or finished.")
+            raise typer.Exit(1)
 
 
 @cli.command()
