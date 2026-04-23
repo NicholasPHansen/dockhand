@@ -115,6 +115,23 @@ class DockerConfig:
 
 
 @dataclasses.dataclass
+class QueueConfig:
+    enabled: bool = False
+    tool: str = "task_spooler"
+
+    @classmethod
+    def load(cls, config: dict):
+        if "queue" not in config:
+            return cls()
+        queue = config["queue"]
+        if not isinstance(queue, dict):
+            error_and_exit(f"Invalid type for queue option in config. Expected dictionary but got {type(queue)}.")
+        enabled = queue.get("enabled", False)
+        tool = queue.get("tool", "task_spooler")
+        return cls(enabled=enabled, tool=tool)
+
+
+@dataclasses.dataclass
 class SSHConfig:
     hostname: str
     user: str
@@ -178,6 +195,7 @@ class CLIConfig:
     profiles: dict | None
     ssh: SSHConfig | None
     docker: DockerConfig | None
+    queue: QueueConfig = dataclasses.field(default_factory=QueueConfig)
 
     @classmethod
     def load(cls):
@@ -206,6 +224,7 @@ class CLIConfig:
         sync = config.get("sync", True)
         ssh = SSHConfig.load(config)
         docker = DockerConfig.load(config)
+        queue = QueueConfig.load(config)
 
         return cls(
             history_path=history_path,
@@ -215,6 +234,7 @@ class CLIConfig:
             sync=sync,
             ssh=ssh,
             docker=docker,
+            queue=queue,
         )
 
     @classmethod

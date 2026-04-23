@@ -2,7 +2,8 @@
 import dataclasses
 from typing import List
 
-from git import Repo
+import typer
+from git import InvalidGitRepositoryError, Repo
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from dockhand.build import execute_build
@@ -24,19 +25,38 @@ def execute_run(
     gpus = gpus if gpus is not None else config.gpus
     effective_ports = ports if ports is not None else config.ports
 
+    cmd = _build_docker_run_cmd(config, commands, imagename, gpus, effective_ports)
+
+    with get_client() as client:
+        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
+            task = progress.add_task(description="Starting container", total=None)
+            returncode, stdout = client.run(cmd, cwd=cli_config.remote_path)
+            progress.update(task, completed=True)
+
+    if returncode != 0:
+        error_and_exit(f"Run command failed with return code {returncode}.")
+
+    container_id = stdout[:12]
+    host = cli_config.ssh.hostname if cli_config.ssh else "localhost"
+    add_to_history(config, container_id, commands, branch=_get_branch(), ports=effective_ports, host=host)
+
+
+def _build_docker_run_cmd(
+    config: DockerConfig,
+    commands: List[str],
+    imagename: str,
+    gpus: str | None,
+    effective_ports: list[str] | None,
+) -> str:
+    """Build the docker run command string."""
     volumes = []
     if config.volumes is not None:
         volumes = [f"-v {v['hostpath']}:{v['containerpath']}:{v['permissions']}" for v in config.volumes]
 
-    gpu_flags = []
-    if gpus is not None:
-        gpu_flags = [f"--gpus {gpus}"]
+    gpu_flags = [f"--gpus {gpus}"] if gpus is not None else []
+    port_flags = [f"-p {mapping}" for mapping in effective_ports] if effective_ports is not None else []
 
-    port_flags = []
-    if effective_ports is not None:
-        port_flags = [f"-p {mapping}" for mapping in effective_ports]
-
-    cmd = " ".join(
+    return " ".join(
         [
             "docker",
             "run",
@@ -51,20 +71,50 @@ def execute_run(
         ]
     )
 
+
+def _get_branch() -> str | None:
+    try:
+        with Repo(cli_config.project_root) as repo:
+            return repo.active_branch.name
+    except (InvalidGitRepositoryError, Exception):
+        return None
+
+
+def execute_queued_run(
+    config: DockerConfig,
+    commands: List[str],
+    imagename: str | None = None,
+    gpus: str | None = None,
+    ports: list[str] | None = None,
+) -> int:
+    """Submit a container run to the task spooler queue. Returns the ts job ID."""
+    from dockhand.queue import ts_submit
+
+    imagename = imagename or config.imagename
+    gpus = gpus if gpus is not None else config.gpus
+    effective_ports = ports if ports is not None else config.ports
+
+    docker_cmd = _build_docker_run_cmd(config, commands, imagename, gpus, effective_ports)
+
     with get_client() as client:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
-            task = progress.add_task(description="Starting container", total=None)
-            returncode, stdout = client.run(cmd, cwd=cli_config.remote_path)
+            task = progress.add_task(description="Queuing job", total=None)
+            ts_job_id = ts_submit(client, docker_cmd, cwd=cli_config.remote_path)
             progress.update(task, completed=True)
 
-    if returncode != 0:
-        error_and_exit(f"Run command failed with return code {returncode}.")
+    typer.echo(f"Job queued with ID {ts_job_id}")
 
-    container_id = stdout[:12]
-    with Repo(cli_config.project_root) as repo:
-        branch = repo.active_branch.name
     host = cli_config.ssh.hostname if cli_config.ssh else "localhost"
-    add_to_history(config, container_id, commands, branch, ports=effective_ports, host=host)
+    add_to_history(
+        config,
+        container_id=None,
+        commands=commands,
+        branch=_get_branch(),
+        ports=effective_ports,
+        host=host,
+        ts_job_id=ts_job_id,
+    )
+    return ts_job_id
 
 
 def execute_submit(
@@ -76,36 +126,52 @@ def execute_submit(
     gpus: str | None = None,
     ports: list[str] | None = None,
 ):
-    """Build the image and run a container with the given command(s)."""
+    """Build the image and run a container (or queue it) with the given command(s)."""
     dockerfile = dockerfile or config.dockerfile
     imagename = imagename or config.imagename
     gpus = gpus if gpus is not None else config.gpus
 
     execute_build(config, sync, dockerfile=dockerfile, imagename=imagename)
-    execute_run(config, commands, imagename=imagename, gpus=gpus, ports=ports)
+
+    if cli_config.queue.enabled:
+        execute_queued_run(config, commands, imagename=imagename, gpus=gpus, ports=ports)
+    else:
+        execute_run(config, commands, imagename=imagename, gpus=gpus, ports=ports)
 
 
 def execute_resubmit(docker_config: DockerConfig, resubmit_config: DockerResubmitConfig):
     """Resubmit a previous docker run with optional overrides."""
-    from dockhand.history import load_history
+    from dockhand.history import get_history_entry_by_job_id, load_history
 
     history = load_history()
 
     if not history:
         error_and_exit("No docker history found. Submit a docker job first.")
 
-    # Use latest if no container_id provided
-    container_id = resubmit_config.container_id or history[-1]["container_id"]
-
-    # Find entry by container_id
     entry = None
-    for hist_entry in history:
-        if hist_entry["container_id"] == container_id:
-            entry = hist_entry
-            break
 
-    if entry is None:
-        error_and_exit(f"Container ID '{container_id}' not found in history.")
+    if cli_config.queue.enabled:
+        # Look up by ts job ID
+        job_id = int(resubmit_config.container_id) if resubmit_config.container_id else None
+        if job_id is not None:
+            entry = get_history_entry_by_job_id(job_id)
+            if entry is None:
+                error_and_exit(f"Job ID '{job_id}' not found in history.")
+        else:
+            # Default to latest queued entry
+            queued = [e for e in history if e.get("ts_job_id") is not None]
+            if not queued:
+                error_and_exit("No queued job history found.")
+            entry = queued[-1]
+    else:
+        # Look up by container ID
+        container_id = resubmit_config.container_id or history[-1]["container_id"]
+        for hist_entry in history:
+            if hist_entry.get("container_id") == container_id:
+                entry = hist_entry
+                break
+        if entry is None:
+            error_and_exit(f"Container ID '{container_id}' not found in history.")
 
     original_config = entry["config"]
 
@@ -117,7 +183,6 @@ def execute_resubmit(docker_config: DockerConfig, resubmit_config: DockerResubmi
     imagename = resubmit_config.imagename if resubmit_config.imagename is not None else original_config.get("imagename")
     gpus = resubmit_config.gpus if resubmit_config.gpus is not None else original_config.get("gpus")
 
-    # Create updated config by merging with original
     updated_config = dataclasses.replace(docker_config, dockerfile=dockerfile, imagename=imagename, gpus=gpus)
 
     execute_submit(

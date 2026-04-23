@@ -107,20 +107,36 @@ def install(
 @cli.command()
 def logs(
     imagename: Annotated[str, typer.Option(default_factory=DockerDefault("imagename"))],
-    container_id: str | None = None,
+    id: Annotated[
+        str | None,
+        typer.Argument(help="Job ID (queue mode) or container ID (direct mode). Defaults to last job/container."),
+    ] = None,
     all: bool = False,
     n: int | None = None,
 ):
-    """Show logs from a container (defaults to last run container)."""
+    """Show logs from a job or container (defaults to last)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_logs(cli_config.docker, container_id=container_id, imagename=imagename, all=all, n=n)
+    if cli_config.queue.enabled:
+        job_id = int(id) if id is not None else None
+        execute_logs(cli_config.docker, job_id=job_id, container_id=None, imagename=imagename, all=all, n=n)
+    else:
+        execute_logs(cli_config.docker, job_id=None, container_id=id, imagename=imagename, all=all, n=n)
 
 
 @cli.command()
-def stop(container_id: str | None = None):
-    """Stop a running container (defaults to last run container)."""
+def stop(
+    id: Annotated[
+        str | None,
+        typer.Argument(help="Job ID (queue mode) or container ID (direct mode). Defaults to last job/container."),
+    ] = None,
+):
+    """Stop a running job/container or remove a queued job (defaults to last)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_stop(cli_config.docker, container_id=container_id)
+    if cli_config.queue.enabled:
+        job_id = int(id) if id is not None else None
+        execute_stop(cli_config.docker, job_id=job_id)
+    else:
+        execute_stop(cli_config.docker, container_id=id)
 
 
 @cli.command()
@@ -174,7 +190,10 @@ def download(
 
 @cli.command()
 def resubmit(
-    container_id: str | None = None,
+    id: Annotated[
+        str | None,
+        typer.Argument(help="Job ID (queue mode) or container ID (direct mode). Defaults to last."),
+    ] = None,
     commands: List[str] | None = None,
     dockerfile: str | None = None,
     imagename: str | None = None,
@@ -183,7 +202,7 @@ def resubmit(
     """Resubmit a previous Docker run (defaults to latest). Optionally with new parameters."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     config = DockerResubmitConfig(
-        container_id=container_id,
+        container_id=id,
         commands=commands,
         dockerfile=dockerfile,
         imagename=imagename,
@@ -194,12 +213,19 @@ def resubmit(
 
 @cli.command()
 def remove(
-    container_ids: Annotated[List[str], typer.Argument()] = None,
+    ids: Annotated[
+        List[str],
+        typer.Argument(help="Job IDs (queue mode) or container IDs (direct mode). Defaults to last."),
+    ] = None,
     from_history: bool = False,
 ):
-    """Remove container(s) (defaults to last run container). Optionally remove from history."""
+    """Remove job(s) from queue or docker container(s) (defaults to last)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_remove(cli_config.docker, container_ids=container_ids, from_history=from_history)
+    if cli_config.queue.enabled:
+        job_ids = [int(i) for i in ids] if ids else None
+        execute_remove(cli_config.docker, job_ids=job_ids, from_history=from_history)
+    else:
+        execute_remove(cli_config.docker, container_ids=ids, from_history=from_history)
 
 
 @cli.command()
