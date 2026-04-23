@@ -3,7 +3,7 @@ from rich.console import Console
 from rich.tree import Tree
 
 from dockhand.client import get_client
-from dockhand.config import DockerConfig
+from dockhand.config import DockerConfig, cli_config
 
 
 def _workdir_relative(containerpath: str, workdir: str) -> str:
@@ -28,12 +28,6 @@ def _resolve_to_host(relative_path: str, config: DockerConfig) -> tuple[str, str
             suffix = relative_path[len(vol_relative) :]
             return hostpath + suffix, hostpath
     return None
-
-
-def _find_files(client, hostpath: str, depth: int | None) -> tuple[int, str]:
-    """Run find via the client to list files under hostpath."""
-    maxdepth = f"-maxdepth {depth} " if depth is not None else ""
-    return client.run(f"find {hostpath} {maxdepth}-type f 2>/dev/null", cwd=None)
 
 
 def _build_tree(paths: list[str], strip_prefix: str) -> dict:
@@ -75,26 +69,27 @@ def _dict_to_rich_tree(d: dict, tree: Tree) -> None:
 
 
 def execute_volumes(config: DockerConfig, depth: int | None = None) -> None:
-    """List files in docker-mounted volumes as a tree."""
-    if not config.volumes:
-        Console().print("No volumes configured.")
-        return
+    """Spin up a temporary container and list its full filesystem as a tree."""
+    workdir = config.containerworkdir or "/"
 
-    console = Console()
+    volumes = []
+    if config.volumes:
+        volumes = [f"-v {v['hostpath']}:{v['containerpath']}:{v['permissions']}" for v in config.volumes]
+
+    maxdepth = f"-maxdepth {depth} " if depth is not None else ""
+    find_cmd = f"find {workdir} {maxdepth}-type f 2>/dev/null"
+
+    docker_cmd = " ".join(["docker", "run", "--rm", *volumes, config.imagename, find_cmd])
 
     with get_client() as client:
-        for volume in config.volumes:
-            hostpath = volume["hostpath"].rstrip("/")
-            vol_relative = _workdir_relative(volume["containerpath"], config.containerworkdir)
+        exit_code, stdout = client.run(docker_cmd, cwd=cli_config.remote_path)
 
-            exit_code, stdout = _find_files(client, hostpath, depth)
+    tree = Tree(f"[bold]{workdir}[/bold]")
 
-            tree = Tree(f"[bold]{vol_relative}/[/bold]")
+    if exit_code != 0 or not stdout.strip():
+        tree.add("[dim](empty or image not built)[/dim]")
+    else:
+        lines = [line for line in stdout.strip().splitlines() if line.strip()]
+        _dict_to_rich_tree(_build_tree(lines, workdir), tree)
 
-            if exit_code != 0 or not stdout.strip():
-                tree.add("[dim](empty or inaccessible)[/dim]")
-            else:
-                lines = [line for line in stdout.strip().splitlines() if line.strip()]
-                _dict_to_rich_tree(_build_tree(lines, hostpath), tree)
-
-            console.print(tree)
+    Console().print(tree)
