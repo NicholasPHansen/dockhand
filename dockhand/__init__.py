@@ -198,10 +198,15 @@ def history():
 
 
 @cli.command()
-def volumes():
-    """List files in docker-mounted volumes using workdir-relative paths."""
+def volumes(
+    depth: Annotated[
+        int | None,
+        typer.Option("--depth", help="Maximum directory depth to display."),
+    ] = None,
+):
+    """List files in docker-mounted volumes as a tree."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_volumes(cli_config.docker)
+    execute_volumes(cli_config.docker, depth=depth)
 
 
 @cli.command()
@@ -218,13 +223,17 @@ def download(
         bool,
         typer.Option("--list", help="List files in docker-mounted volumes (same as volumes)"),
     ] = False,
+    depth: Annotated[
+        int | None,
+        typer.Option("--depth", help="Maximum directory depth to display (only applies with --list)."),
+    ] = None,
 ):
     """Download a file from a docker volume by its workdir-relative path.
 
     Files are downloaded preserving their directory structure relative to project root."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     if list_only:
-        execute_volumes(cli_config.docker)
+        execute_volumes(cli_config.docker, depth=depth)
         return
     if path is None:
         typer.echo("Error: Missing argument 'PATH'. Use --list to see available files.")
