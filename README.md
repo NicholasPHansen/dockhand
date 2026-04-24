@@ -14,14 +14,36 @@ This project is *heavily* inspired by the awesome work from @ChrisFugl's [DTU-HP
 
 ## Features
 
+- **Job Queue**: Submit workloads to a [task spooler](https://viric.name/soft/ts/) queue so jobs run in order without stepping on each other
 - **Remote Docker Management**: Build and run Docker containers on a remote machine via SSH
 - **Local or Remote**: Automatically detect localhost vs remote, or explicitly configure
 - **Job Queue**: Optional [task spooler](https://viric.name/soft/ts/) integration — submit jobs to a shared queue so they run in order across multiple users
 - **Port Forwarding**: Establish SSH tunnels to access container ports locally
 - **File Syncing**: Automatically sync your local code to the remote before building
 - **Volume Management**: Mount local directories into containers and download files back
-- **Container History**: Track all container runs with full configuration snapshots
-- **Quick Resubmit**: Easily rerun previous containers with the same or different parameters
+- **Job History**: Track all runs with local job IDs that are stable across hosts
+- **Quick Resubmit**: Easily rerun previous jobs with the same or different parameters
+
+## Requirements
+
+### Local machine
+
+- Python 3.10+
+- [git](https://git-scm.com/) — used for branch tracking and code sync
+
+### Docker host (remote or local)
+
+- [Docker](https://docs.docker.com/engine/install/) — container runtime
+- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (`nvidia-docker`) — required only if using GPUs (`--gpus`)
+- [task spooler (`tsp`)](https://viric.name/soft/ts/) — job queue daemon; jobs submitted via `dockhand` are queued through `tsp`
+
+Installing task spooler on Ubuntu/Debian:
+
+```bash
+sudo apt-get install task-spooler
+```
+
+On other systems the binary may be called `ts` instead of `tsp` — check your package manager.
 
 ## Installation
 
@@ -54,61 +76,78 @@ All commands work with the same `.dockhand.json` configuration file format. See 
 
 ### Available Commands
 
-- **submit**: Build the image and run a container (or queue it) with the given command(s)
-- **run**: Run a container from an already-built image (skip build step)
-- **install**: Build the Docker image without running it
-- **logs**: Show logs from a container or job (defaults to last)
-- **stop**: Stop a running container or cancel a queued job (defaults to last)
-- **remove**: Remove container(s) or queued job(s) (defaults to last)
-- **jobs**: List running containers or queue contents (when queue is enabled)
-- **urgent**: Promote a queued job to the front of the queue
-- **history**: Show history of all past Docker runs
-- **volumes**: Show the full container filesystem as a tree
-- **download**: Download a file from a docker volume
-- **resubmit**: Resubmit a previous Docker run with optional overrides
-- **tunnel**: Forward container ports to localhost via SSH tunnel
+| Command | Description |
+|---------|-------------|
+| `submit` | Build the image and queue a container run |
+| `run` | Queue a container run from an already-built image |
+| `install` | Build the Docker image without running it |
+| `jobs` | List active (running/queued) jobs — use `--all` for finished jobs too |
+| `logs` | Show logs from a job — use `--follow`/`-f` to stream live |
+| `stop` | Stop a **running** job |
+| `remove` | Remove a **queued** job before it starts |
+| `urgent` | Promote a queued job to the front of the queue |
+| `history` | Show history of all past runs |
+| `volumes` | List the full container filesystem as a tree |
+| `download` | Download a file from a docker volume |
+| `resubmit` | Resubmit a previous job with optional overrides |
+| `tunnel` | Forward container ports to localhost via SSH tunnel |
+
+All commands that take a job ID default to the most recent job if no ID is provided.
 
 ### Examples
 
 ```bash
-# Build image and run a container
-uv run dockhand submit --gpus all 'python train.py --epochs 10'
+# Build image and queue a run
+dockhand submit 'python train.py --epochs 10'
 
-# Run with explicit port mappings
-uv run dockhand submit -p 8080:8080 -p 6006:6006 'python train.py'
+# Queue a run with GPUs and port mappings
+dockhand submit --gpus all -p 6006:6006 'python train.py'
 
-# Run a container from an already-built image
-uv run dockhand run 'python train.py --epochs 20'
+# Queue a run from an already-built image
+dockhand run 'python train.py --epochs 20'
 
-# Build image without running
-uv run dockhand install --dockerfile Dockerfile.prod
+# Build image only
+dockhand install --dockerfile Dockerfile.prod
+
+# Check active jobs
+dockhand jobs
+
+# Check all jobs including finished
+dockhand jobs --all
+
+# Stream logs from the last job
+dockhand logs --follow
+
+# Show the last 50 lines from job #3
+dockhand logs 3 --n 50
+
+# Stop the last running job
+dockhand stop
+
+# Remove a queued job before it starts
+dockhand remove 4
+
+# Promote job #5 to the front of the queue
+dockhand urgent 5
 
 # Forward container ports to localhost
-uv run dockhand tunnel
-# or specify custom ports
-uv run dockhand tunnel -p 8080:8080
-
-# Check logs from the last container
-uv run dockhand logs --n 50
-
-# Stop the last running container
-uv run dockhand stop
-
-# Remove the last container and from history
-uv run dockhand remove --from-history
+dockhand tunnel
 
 # See all past runs
-uv run dockhand history
+dockhand history
+
+# Browse mounted volumes
+dockhand volumes --depth 2
 
 # Browse the full container filesystem as a tree
 uv run dockhand volumes
 uv run dockhand volumes --depth 3
 
 # Download results
-uv run dockhand download results/model.pth
+dockhand download results/model.pth
 
-# Resubmit the latest container with different GPUs
-uv run dockhand resubmit --gpus '2'
+# Resubmit the latest job with different GPUs
+dockhand resubmit --gpus 2
 ```
 
 **Note:** If you've installed dockhand globally, you can omit `uv run`.
@@ -205,26 +244,6 @@ Create a `.dockhand.json` file in your project root with Docker and SSH configur
 }
 ```
 
-### Local Docker (localhost)
-
-For local development against localhost Docker daemon:
-
-```json
-{
-    "docker": {
-        "dockerfile": "Dockerfile",
-        "imagename": "my-image",
-        "volumes": []
-    }
-}
-```
-
-Hostname detection:
-
-- If `ssh` config is missing → uses LocalClient
-- If `ssh.hostname` resolves to localhost or `127.0.0.1` → uses LocalClient
-- Otherwise → uses SSHClient
-
 ### SSH Configuration
 
 To run Docker commands on a remote machine, configure SSH:
@@ -236,16 +255,22 @@ To run Docker commands on a remote machine, configure SSH:
         "identityfile": "/path/to/private/key",
         "hostname": "remote.example.com"
     },
-    "docker": { ... }
+    "docker": { "..." }
 }
 ```
+
+Hostname detection:
+
+- If `ssh` config is missing → uses LocalClient
+- If `ssh.hostname` resolves to localhost or `127.0.0.1` → uses LocalClient
+- Otherwise → uses SSHClient
 
 ### Docker Configuration
 
 ```json
 {
     "sync": true,
-    "ssh": { ... },
+    "ssh": { "..." },
     "docker": {
         "dockerfile": "Dockerfile",
         "imagename": "my-image",
@@ -277,7 +302,7 @@ To run Docker commands on a remote machine, configure SSH:
 - **imagename**: Docker image name (required)
 - **volumes**: List of volume mounts (required but can be empty list)
 - **ports**: Port mappings (optional)
-- **gpus**: GPU configuration for `docker run` (optional)
+- **gpus**: GPU configuration passed to `docker run --gpus` (optional)
 - **containerworkdir**: Working directory in container for path resolution (default: /)
 
 ### Profiles
@@ -308,8 +333,8 @@ Use profiles to switch between different configurations:
 ```
 
 ```bash
-uv run dockhand --profile dev submit 'python train.py'
-uv run dockhand --profile prod submit 'python train.py'
+dockhand --profile dev submit 'python train.py'
+dockhand --profile prod submit 'python train.py'
 ```
 
 ### Complete Example
@@ -357,36 +382,12 @@ uv run dockhand --profile prod submit 'python train.py'
 
 ## How It Works
 
-1. **Build** (`submit`/`install`): Optionally syncs local code via rsync, then runs `docker build`
-2. **Run** (`submit`/`run`): Executes `docker run` directly, or queues it via `tsp` when queue is enabled
-3. **Queue** (`jobs`/`stop`/`remove`): Interfaces with task spooler to manage pending and running jobs
-4. **Port Forwarding** (`tunnel`): Establishes SSH local port forwards for container ports
-5. **History**: Stores container IDs, job IDs, and configurations in `.dockhand_history.json`
-6. **Resubmit**: Looks up a previous run in history and re-runs with optional overrides
-7. **Volumes**: Spins up a temporary container to show the full filesystem tree
-8. **Download**: Maps containerworkdir-relative paths to host paths and uses rsync to download files
-
-## Local vs Remote
-
-The client type is determined by:
-
-1. **If no SSH config** → LocalClient (run commands locally)
-2. **If hostname resolves to localhost or `127.0.0.1`** → LocalClient (run commands locally)
-3. **Otherwise** → SSHClient (run commands via SSH)
-
-This allows:
-
-- Local development against localhost Docker daemon
-- Local hostname resolution (e.g., `mycomputer.local` resolving to `127.0.0.1`)
-- Remote execution via SSH to a different host
-
-## Requirements
-
-- Python 3.10+
-- git (for repo detection and branch tracking)
-- SSH access to the remote machine (for remote docker host)
-- Docker installed on the remote machine
-- [task spooler](https://viric.name/soft/ts/) (`tsp`) on the Docker host (optional, for queue support)
+1. **Build** (`submit`/`install`): Optionally syncs local code via rsync, then runs `docker build` on the host
+2. **Queue** (`submit`/`run`): Submits a `docker run` command to task spooler (`tsp`), which runs jobs one at a time in order
+3. **Job IDs**: Each submission gets a local job ID (stable, incrementing) alongside the tsp job number — the local ID is what you use in all commands
+4. **Logs** (`logs`): Reads from the tsp output file; use `--follow` to stream a running job live
+5. **Port Forwarding** (`tunnel`): Establishes SSH local port forwards for container ports
+6. **Download**: Maps containerworkdir-relative paths to host paths and uses rsync to fetch files
 
 ## License
 
