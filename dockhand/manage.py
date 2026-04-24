@@ -1,4 +1,5 @@
 """Docker container lifecycle management (logs, stop, remove, stats)."""
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -98,10 +99,7 @@ def execute_logs(
     with get_client() as client:
         returncode, _ = client.run(cmd, cwd=cli_config.remote_path)
     if returncode != 0:
-        error_and_exit(
-            f"Could not read logs for job #{local_id}. "
-            "The job may still be queued and not yet started."
-        )
+        error_and_exit(f"Could not read logs for job #{local_id}. The job may still be queued and not yet started.")
 
 
 def execute_stop(config: DockerConfig, *, job_id: int | None = None):
