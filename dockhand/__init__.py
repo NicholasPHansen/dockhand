@@ -10,7 +10,8 @@ from dockhand.download import execute_download
 from dockhand.history import execute_history
 from dockhand.manage import execute_logs, execute_remove, execute_stats, execute_stop
 from dockhand.queue import ts_make_urgent
-from dockhand.run import execute_queued_run, execute_resubmit, execute_submit
+from dockhand.resubmit import execute_resubmit
+from dockhand.submit import execute_queued_run, execute_submit
 from dockhand.tunnel import execute_tunnel
 from dockhand.volumes import execute_volumes
 
@@ -63,28 +64,23 @@ def main(
 @cli.command()
 def submit(
     commands: List[str],
-    dockerfile: Annotated[str, typer.Option(default_factory=DockerDefault("dockerfile"))],
     imagename: Annotated[str, typer.Option(default_factory=DockerDefault("imagename"))],
     gpus: Annotated[str, typer.Option(default_factory=DockerDefault("gpus"))],
     sync: Annotated[bool, typer.Option(default_factory=SyncDefault())],
     ports: Annotated[List[str], typer.Option("-p")] = [],
     urgent: Annotated[bool, typer.Option("--urgent", help="Move to front of queue.")] = False,
-    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show docker build output.")] = False,
     slots: Annotated[int, typer.Option("--slots", help="Queue slots to reserve (e.g. number of CPUs).")] = None,
 ):
-    """Build the image and queue a container run with the given command(s)."""
-    msg = f"docker requires a Docker configuration in '{CONFIG_FILENAME}'"
-    cli_config.check_docker(msg=msg)
+    """Sync code and queue a container run with the given command(s)."""
+    cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     execute_submit(
         cli_config.docker,
         commands,
         sync=sync,
-        dockerfile=dockerfile,
         imagename=imagename,
         gpus=gpus,
         ports=ports or None,
         urgent=urgent,
-        verbose=verbose,
         slots=slots,
     )
 
@@ -256,7 +252,6 @@ def resubmit(
         typer.Argument(help="Job ID to resubmit. Defaults to last."),
     ] = None,
     commands: List[str] | None = None,
-    dockerfile: str | None = None,
     imagename: str | None = None,
     gpus: str | None = None,
 ):
@@ -265,7 +260,6 @@ def resubmit(
     config = DockerResubmitConfig(
         container_id=id,
         commands=commands,
-        dockerfile=dockerfile,
         imagename=imagename,
         gpus=gpus,
     )

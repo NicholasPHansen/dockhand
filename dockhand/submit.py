@@ -1,16 +1,14 @@
-"""Docker container execution and resubmission."""
-import dataclasses
+"""Docker container submission and queuing."""
 from typing import List
 
 import typer
 from git import InvalidGitRepositoryError, Repo
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from dockhand.build import execute_build
 from dockhand.client import get_client
-from dockhand.config import DockerConfig, DockerResubmitConfig, cli_config
-from dockhand.error import error_and_exit
+from dockhand.config import DockerConfig, cli_config
 from dockhand.history import add_to_history
+from dockhand.sync import execute_sync
 
 
 def _build_docker_run_cmd(
@@ -21,9 +19,18 @@ def _build_docker_run_cmd(
     effective_ports: list[str] | None,
 ) -> str:
     """Build the docker run command string."""
-    volumes = []
+    if config.containerworkdir == "/":
+        typer.echo(
+            "Warning: containerworkdir is '/' — mounting code at the container root will shadow the entire filesystem.",
+            err=True,
+        )
+
+    # Implicit code mount: remote project path → containerworkdir
+    code_mount = f"-v {cli_config.remote_path}:{config.containerworkdir}:rw"
+
+    data_volumes = []
     if config.volumes is not None:
-        volumes = [f"-v {v['hostpath']}:{v['containerpath']}:{v['permissions']}" for v in config.volumes]
+        data_volumes = [f"-v {v['hostpath']}:{v['containerpath']}:{v['permissions']}" for v in config.volumes]
 
     gpu_flags = [f"--gpus {gpus}"] if gpus is not None else []
     port_flags = [f"-p {mapping}" for mapping in effective_ports] if effective_ports is not None else []
@@ -33,7 +40,8 @@ def _build_docker_run_cmd(
             "docker",
             "run",
             "--rm",
-            *volumes,
+            code_mount,
+            *data_volumes,
             *gpu_flags,
             *port_flags,
             imagename,
@@ -96,57 +104,13 @@ def execute_submit(
     config: DockerConfig,
     commands: List[str],
     sync: bool,
-    dockerfile: str | None = None,
     imagename: str | None = None,
     gpus: str | None = None,
     ports: list[str] | None = None,
     urgent: bool = False,
-    verbose: bool = False,
     slots: int | None = None,
 ):
-    """Build the image and run a container (or queue it) with the given command(s)."""
-    dockerfile = dockerfile or config.dockerfile
-    imagename = imagename or config.imagename
-    gpus = gpus if gpus is not None else config.gpus
-
-    execute_build(config, sync, dockerfile=dockerfile, imagename=imagename, verbose=verbose)
+    """Sync code and queue a container run with the given command(s)."""
+    if sync:
+        execute_sync(confirm_changes=True)
     execute_queued_run(config, commands, imagename=imagename, gpus=gpus, ports=ports, urgent=urgent, slots=slots)
-
-
-def execute_resubmit(docker_config: DockerConfig, resubmit_config: DockerResubmitConfig):
-    """Resubmit a previous docker run with optional overrides."""
-    from dockhand.history import get_history_entry, load_history
-
-    history = load_history()
-
-    if not history:
-        error_and_exit("No docker history found. Submit a docker job first.")
-
-    local_id = int(resubmit_config.container_id) if resubmit_config.container_id else None
-    if local_id is not None:
-        entry = get_history_entry(local_id)
-        if entry is None:
-            error_and_exit(f"Job #{local_id} not found in history.")
-    else:
-        entry = history[-1]
-
-    original_config = entry["config"]
-
-    # Prepare overrides (use provided values or fall back to original)
-    commands = resubmit_config.commands if resubmit_config.commands is not None else original_config.get("commands", [])
-    dockerfile = (
-        resubmit_config.dockerfile if resubmit_config.dockerfile is not None else original_config.get("dockerfile")
-    )
-    imagename = resubmit_config.imagename if resubmit_config.imagename is not None else original_config.get("imagename")
-    gpus = resubmit_config.gpus if resubmit_config.gpus is not None else original_config.get("gpus")
-
-    updated_config = dataclasses.replace(docker_config, dockerfile=dockerfile, imagename=imagename, gpus=gpus)
-
-    execute_submit(
-        updated_config,
-        commands,
-        sync=False,
-        dockerfile=dockerfile,
-        imagename=imagename,
-        gpus=gpus,
-    )

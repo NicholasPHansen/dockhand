@@ -19,7 +19,6 @@ class DockerVolumesConfig:
 class DockerResubmitConfig:
     container_id: str | None
     commands: List[str] | None
-    dockerfile: str | None
     imagename: str | None
     gpus: str | None
 

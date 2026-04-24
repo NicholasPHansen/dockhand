@@ -14,13 +14,14 @@ This project is *heavily* inspired by the awesome work from @ChrisFugl's [DTU-HP
 
 ## Features
 
+- **Fast Iteration**: Code is mounted into the container at runtime — no rebuild needed when your code changes
 - **Job Queue**: All workloads are submitted through [task spooler](https://viric.name/soft/ts/) so jobs run in order without competing for resources
 - **Slot Reservations**: Declare how many CPU slots a job needs so heavy jobs don't block each other
 - **Remote Docker Management**: Build and run Docker containers on a remote machine via SSH
 - **Local or Remote**: Automatically detect localhost vs remote, or explicitly configure
 - **Port Forwarding**: Establish SSH tunnels to access container ports locally
-- **File Syncing**: Automatically sync your local code to the remote before building
-- **Volume Management**: Mount local directories into containers and download files back
+- **File Syncing**: Automatically sync your local code to the remote before running
+- **Volume Management**: Mount data directories into containers and download results back
 - **Stable Job IDs**: Local job IDs increment independently of the host, so IDs are unambiguous across machines
 - **Quick Resubmit**: Easily rerun previous jobs with the same or different parameters
 
@@ -103,14 +104,22 @@ All commands work with the same `.dockhand.json` configuration file. See [Config
 
 All commands that accept a job ID default to the most recent job if no ID is given.
 
+### Typical workflow
+
+```bash
+# 1. Build the image once (or when dependencies change)
+dockhand install
+
+# 2. Iterate freely — submit syncs code and queues a run, no rebuild needed
+dockhand submit 'python train.py --epochs 10'
+dockhand submit 'python train.py --epochs 10'  # code changed? just submit again
+```
+
 ### Examples
 
 ```bash
-# Build image and queue a run
+# Sync code and queue a run
 dockhand submit 'python train.py --epochs 10'
-
-# Show build output while building
-dockhand submit -v 'python train.py'
 
 # Reserve 4 CPU slots for a parallel job
 dockhand submit --slots 4 'python train.py --workers 4'
@@ -118,10 +127,17 @@ dockhand submit --slots 4 'python train.py --workers 4'
 # Queue a run with GPUs and port mappings
 dockhand submit --gpus all -p 6006:6006 'python train.py'
 
-# Queue a run from an already-built image (skip build)
+# Queue a run without syncing (code already up to date)
+dockhand submit --no-sync 'python train.py'
+
+# Queue a run from an already-built image, skip sync
 dockhand run 'python train.py --epochs 20'
 
-# Build image only
+# Build image (run once, or when dependencies change)
+dockhand install
+# Show full build output
+dockhand install -v
+# Build a specific Dockerfile
 dockhand install --dockerfile Dockerfile.prod
 
 # Check active jobs
@@ -281,7 +297,7 @@ Hostname detection:
 | `ports` | Port mappings | — |
 | `gpus` | GPU flag passed to `docker run --gpus` | — |
 | `slots` | Queue slots to reserve per job | `1` |
-| `containerworkdir` | Working directory in container for path resolution | `/` |
+| `containerworkdir` | Path inside the container where the project is mounted and commands run from | `/` |
 
 ### Profiles
 
@@ -361,12 +377,13 @@ dockhand --profile prod submit 'python train.py'
 
 ## How It Works
 
-1. **Build** (`submit`/`install`): Optionally syncs local code via rsync, then runs `docker build` on the host. Pass `-v` to stream build output; default shows a spinner only.
-2. **Queue** (`submit`/`run`): Submits a `docker run` command to task spooler (`tsp`), which runs jobs one at a time in submission order. Jobs with `--slots N` only start when N free slots are available.
-3. **Job IDs**: Each submission gets a local job ID (stable, auto-incrementing) stored alongside the host and tsp job number. The local ID is what all commands accept.
-4. **Logs** (`logs`): Reads directly from the tsp output file. Use `--follow`/`-f` to stream a running job live, `--n N` for the last N lines.
-5. **Port Forwarding** (`tunnel`): Establishes SSH local port forwards for container ports.
-6. **Download**: Maps containerworkdir-relative paths to host paths and uses rsync to fetch files.
+1. **Build** (`install`): Optionally syncs local code via rsync, then runs `docker build` on the host. Pass `-v` to stream build output; default shows a spinner only. Only needed when dependencies or the Dockerfile change.
+2. **Submit** (`submit`/`run`): Optionally syncs code to the remote, then submits a `docker run` command to task spooler (`tsp`). The project directory is automatically mounted into the container at `containerworkdir`, so the running container always uses your latest code without a rebuild.
+3. **Queue**: tsp runs jobs one at a time in submission order. Jobs with `--slots N` only start when N free slots are available.
+4. **Job IDs**: Each submission gets a local job ID (stable, auto-incrementing) stored alongside the host and tsp job number. The local ID is what all commands accept.
+5. **Logs** (`logs`): Reads directly from the tsp output file. Use `--follow`/`-f` to stream a running job live, `--n N` for the last N lines.
+6. **Port Forwarding** (`tunnel`): Establishes SSH local port forwards for container ports.
+7. **Download**: Maps containerworkdir-relative paths to host paths and uses rsync to fetch files.
 
 ## License
 
