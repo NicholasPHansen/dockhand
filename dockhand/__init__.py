@@ -95,9 +95,7 @@ def run(
 ):
     """Queue a container run from an already-built image."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_queued_run(
-        cli_config.docker, commands, imagename=imagename, gpus=gpus, ports=ports or None, urgent=urgent
-    )
+    execute_queued_run(cli_config.docker, commands, imagename=imagename, gpus=gpus, ports=ports or None, urgent=urgent)
 
 
 @cli.command()
@@ -118,21 +116,22 @@ def logs(
         typer.Argument(help="Job ID. Defaults to last job."),
     ] = None,
     n: int | None = None,
+    follow: Annotated[bool, typer.Option("--follow", "-f", help="Stream output as the job runs.")] = False,
 ):
     """Show logs from a job (defaults to last)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     job_id = int(id) if id is not None else None
-    execute_logs(cli_config.docker, job_id=job_id, n=n)
+    execute_logs(cli_config.docker, job_id=job_id, n=n, follow=follow)
 
 
 @cli.command()
 def stop(
     id: Annotated[
         str | None,
-        typer.Argument(help="Job ID. Defaults to last job."),
+        typer.Argument(help="Job ID. Defaults to last running job."),
     ] = None,
 ):
-    """Stop a running job or remove a queued job (defaults to last)."""
+    """Stop a running job (defaults to last)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     job_id = int(id) if id is not None else None
     execute_stop(cli_config.docker, job_id=job_id)
@@ -154,23 +153,28 @@ def urgent(
 ):
     """Promote a queued job to the front of the queue."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    if id is None:
-        from dockhand.history import load_history
+    from dockhand.history import get_history_entry, load_history
 
+    if id is None:
         history = load_history()
-        queued = [e for e in history if e.get("ts_job_id") is not None]
-        if not queued:
+        if not history:
             typer.echo("No job history found. Provide a job ID.")
             raise typer.Exit(1)
-        job_id = queued[-1]["ts_job_id"]
+        entry = history[-1]
     else:
-        job_id = int(id)
+        entry = get_history_entry(int(id))
+        if entry is None:
+            typer.echo(f"Job #{id} not found in history.")
+            raise typer.Exit(1)
+
+    local_id = entry["local_id"]
+    ts_job_id = entry["ts_job_id"]
 
     with get_client() as client:
-        if ts_make_urgent(client, job_id, cwd=cli_config.remote_path):
-            typer.echo(f"Job {job_id} moved to front of queue.")
+        if ts_make_urgent(client, ts_job_id, cwd=cli_config.remote_path):
+            typer.echo(f"Job #{local_id} moved to front of queue.")
         else:
-            typer.echo(f"Failed to promote job {job_id}. It may have already started or finished.")
+            typer.echo(f"Failed to promote job #{local_id}. It may have already started or finished.")
             raise typer.Exit(1)
 
 
@@ -185,7 +189,7 @@ def history():
 def volumes(
     id: Annotated[
         str | None,
-        typer.Argument(help="Job ID or container ID to use mounts from. Defaults to config."),
+        typer.Argument(help="Job ID to use mounts from. Defaults to config."),
     ] = None,
     depth: Annotated[
         int | None,
@@ -218,7 +222,7 @@ def download(
     ] = None,
     id: Annotated[
         str | None,
-        typer.Option("--id", help="Job ID or container ID to use mounts from (only applies with --list)."),
+        typer.Option("--id", help="Job ID to use mounts from (only applies with --list)."),
     ] = None,
 ):
     """Download a file from a docker volume by its workdir-relative path.
@@ -262,11 +266,11 @@ def resubmit(
 def remove(
     ids: Annotated[
         List[str],
-        typer.Argument(help="Job IDs to remove from queue. Defaults to last."),
+        typer.Argument(help="Job IDs to remove from queue. Defaults to last queued job."),
     ] = None,
     from_history: bool = False,
 ):
-    """Remove pending job(s) from the queue (defaults to last)."""
+    """Remove queued job(s) that haven't started yet (defaults to last)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     job_ids = [int(i) for i in ids] if ids else None
     execute_remove(cli_config.docker, job_ids=job_ids, from_history=from_history)
@@ -285,14 +289,14 @@ def tunnel(
 
 
 def _resolve_volumes_overrides(id: str | None) -> tuple[str | None, list | None]:
-    """Look up imagename and volumes from history for a given job/container ID."""
+    """Look up imagename and volumes from history for a given job ID."""
     if id is None:
         return None, None
     from dockhand.history import get_history_entry
 
-    entry = get_history_entry(id)
+    entry = get_history_entry(int(id))
     if entry is None:
-        typer.echo(f"Warning: ID '{id}' not found in history — using config defaults.")
+        typer.echo(f"Warning: Job #{id} not found in history — using config defaults.")
         return None, None
     cfg = entry["config"]
     return cfg.get("imagename"), cfg.get("volumes")

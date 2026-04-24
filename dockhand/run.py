@@ -58,7 +58,7 @@ def execute_queued_run(
     ports: list[str] | None = None,
     urgent: bool = False,
 ) -> int:
-    """Submit a container run to the task spooler queue. Returns the ts job ID."""
+    """Submit a container run to the task spooler queue. Returns the local job ID."""
     from dockhand.queue import ts_make_urgent, ts_submit
 
     imagename = imagename or config.imagename
@@ -75,20 +75,19 @@ def execute_queued_run(
                 ts_make_urgent(client, ts_job_id, cwd=cli_config.remote_path)
             progress.update(task, completed=True)
 
-    label = "urgent job" if urgent else "job"
-    typer.echo(f"Queued {label} with ID {ts_job_id}")
-
     host = cli_config.ssh.hostname if cli_config.ssh else "localhost"
-    add_to_history(
+    local_id = add_to_history(
         config,
-        container_id=None,
         commands=commands,
+        ts_job_id=ts_job_id,
         branch=_get_branch(),
         ports=effective_ports,
         host=host,
-        ts_job_id=ts_job_id,
     )
-    return ts_job_id
+
+    label = "urgent job" if urgent else "job"
+    typer.echo(f"Queued {label} #{local_id}")
+    return local_id
 
 
 def execute_submit(
@@ -112,24 +111,20 @@ def execute_submit(
 
 def execute_resubmit(docker_config: DockerConfig, resubmit_config: DockerResubmitConfig):
     """Resubmit a previous docker run with optional overrides."""
-    from dockhand.history import get_history_entry_by_job_id, load_history
+    from dockhand.history import get_history_entry, load_history
 
     history = load_history()
 
     if not history:
         error_and_exit("No docker history found. Submit a docker job first.")
 
-    # Look up by ts job ID
-    job_id = int(resubmit_config.container_id) if resubmit_config.container_id else None
-    if job_id is not None:
-        entry = get_history_entry_by_job_id(job_id)
+    local_id = int(resubmit_config.container_id) if resubmit_config.container_id else None
+    if local_id is not None:
+        entry = get_history_entry(local_id)
         if entry is None:
-            error_and_exit(f"Job ID '{job_id}' not found in history.")
+            error_and_exit(f"Job #{local_id} not found in history.")
     else:
-        queued = [e for e in history if e.get("ts_job_id") is not None]
-        if not queued:
-            error_and_exit("No job history found.")
-        entry = queued[-1]
+        entry = history[-1]
 
     original_config = entry["config"]
 
