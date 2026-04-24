@@ -6,6 +6,10 @@ from rich.tree import Tree
 from dockhand.client import get_client
 from dockhand.config import DockerConfig, cli_config
 
+# Default scan depth when --depth is not specified.
+# Keeps the find command fast on large volumes; use --depth N to go deeper.
+DEFAULT_SCAN_DEPTH = 5
+
 
 def _workdir_relative(containerpath: str, workdir: str) -> str:
     """Convert an absolute container path to a workdir-relative path."""
@@ -19,15 +23,25 @@ def _workdir_relative(containerpath: str, workdir: str) -> str:
 
 
 def _resolve_to_host(relative_path: str, config: DockerConfig) -> tuple[str, str] | None:
-    """Map a workdir-relative path back to a host path and volume hostpath."""
+    """Map a workdir-relative path to the host path where it lives.
+
+    Checks data volumes first (most specific match wins), then falls back to
+    the code mount (project root → containerworkdir).
+    """
     workdir = config.containerworkdir.rstrip("/")
-    for volume in config.volumes:
+    for volume in (config.volumes or []):
         containerpath = volume["containerpath"].rstrip("/")
         hostpath = volume["hostpath"].rstrip("/")
         vol_relative = _workdir_relative(containerpath, workdir)
+        if vol_relative == ".":
+            # Volume is mounted at workdir itself — matches any relative path.
+            return hostpath + "/" + relative_path, hostpath
         if relative_path.startswith(vol_relative + "/") or relative_path == vol_relative:
             suffix = relative_path[len(vol_relative) :]
             return hostpath + suffix, hostpath
+    # Fall back to the code mount (project root → containerworkdir).
+    if cli_config.remote_path:
+        return cli_config.remote_path.rstrip("/") + "/" + relative_path, cli_config.remote_path
     return None
 
 
@@ -51,7 +65,8 @@ def _build_tree(paths: list[str], strip_prefix: str) -> dict:
             relative = path
         node = root
         for part in relative.split("/"):
-            node = node.setdefault(part, {})
+            if part:
+                node = node.setdefault(part, {})
     return root
 
 
@@ -93,6 +108,12 @@ def execute_volumes(
         mounts.append({"hostpath": cli_config.remote_path, "containerpath": workdir})
     mounts.extend(volumes)
 
+    # Scan depth: depth+1 ensures folder nodes at the display limit are non-empty
+    # (they have file children one level deeper, so they appear as branches not leaves).
+    # Without --depth, use DEFAULT_SCAN_DEPTH to keep find fast on large volumes.
+    scan_depth = depth + 1 if depth is not None else DEFAULT_SCAN_DEPTH
+    maxdepth_flag = f"-maxdepth {scan_depth}"
+
     container_paths: list[str] = []
 
     with get_client() as client:
@@ -100,7 +121,9 @@ def execute_volumes(
             hostpath = mount["hostpath"].rstrip("/")
             containerpath = mount["containerpath"].rstrip("/")
 
-            exit_code, stdout = client.run(f"find {hostpath} -type f 2>/dev/null", cwd=None, capture=True)
+            exit_code, stdout = client.run(
+                f"find {hostpath} {maxdepth_flag} -type f 2>/dev/null", cwd=None, capture=True
+            )
 
             if exit_code != 0 or not stdout.strip():
                 continue
