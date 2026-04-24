@@ -70,6 +70,7 @@ def submit(
     ports: Annotated[List[str], typer.Option("-p")] = [],
     urgent: Annotated[bool, typer.Option("--urgent", help="Move to front of queue.")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show docker build output.")] = False,
+    slots: Annotated[int, typer.Option("--slots", help="Queue slots to reserve (e.g. number of CPUs).")] = None,
 ):
     """Build the image and queue a container run with the given command(s)."""
     msg = f"docker requires a Docker configuration in '{CONFIG_FILENAME}'"
@@ -84,6 +85,7 @@ def submit(
         ports=ports or None,
         urgent=urgent,
         verbose=verbose,
+        slots=slots,
     )
 
 
@@ -94,10 +96,13 @@ def run(
     gpus: Annotated[str, typer.Option(default_factory=DockerDefault("gpus"))],
     ports: Annotated[List[str], typer.Option("-p")] = [],
     urgent: Annotated[bool, typer.Option("--urgent", help="Move to front of queue.")] = False,
+    slots: Annotated[int, typer.Option("--slots", help="Queue slots to reserve (e.g. number of CPUs).")] = None,
 ):
     """Queue a container run from an already-built image."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_queued_run(cli_config.docker, commands, imagename=imagename, gpus=gpus, ports=ports or None, urgent=urgent)
+    execute_queued_run(
+        cli_config.docker, commands, imagename=imagename, gpus=gpus, ports=ports or None, urgent=urgent, slots=slots
+    )
 
 
 @cli.command()

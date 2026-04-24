@@ -57,6 +57,7 @@ def execute_queued_run(
     gpus: str | None = None,
     ports: list[str] | None = None,
     urgent: bool = False,
+    slots: int | None = None,
 ) -> int:
     """Submit a container run to the task spooler queue. Returns the local job ID."""
     from dockhand.queue import ts_make_urgent, ts_submit
@@ -64,13 +65,14 @@ def execute_queued_run(
     imagename = imagename or config.imagename
     gpus = gpus if gpus is not None else config.gpus
     effective_ports = ports if ports is not None else config.ports
+    effective_slots = slots if slots is not None else config.slots
 
     docker_cmd = _build_docker_run_cmd(config, commands, imagename, gpus, effective_ports)
 
     with get_client() as client:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
             task = progress.add_task(description="Queuing job", total=None)
-            ts_job_id = ts_submit(client, docker_cmd, cwd=cli_config.remote_path)
+            ts_job_id = ts_submit(client, docker_cmd, cwd=cli_config.remote_path, slots=effective_slots)
             if urgent:
                 ts_make_urgent(client, ts_job_id, cwd=cli_config.remote_path)
             progress.update(task, completed=True)
@@ -100,6 +102,7 @@ def execute_submit(
     ports: list[str] | None = None,
     urgent: bool = False,
     verbose: bool = False,
+    slots: int | None = None,
 ):
     """Build the image and run a container (or queue it) with the given command(s)."""
     dockerfile = dockerfile or config.dockerfile
@@ -107,7 +110,7 @@ def execute_submit(
     gpus = gpus if gpus is not None else config.gpus
 
     execute_build(config, sync, dockerfile=dockerfile, imagename=imagename, verbose=verbose)
-    execute_queued_run(config, commands, imagename=imagename, gpus=gpus, ports=ports, urgent=urgent)
+    execute_queued_run(config, commands, imagename=imagename, gpus=gpus, ports=ports, urgent=urgent, slots=slots)
 
 
 def execute_resubmit(docker_config: DockerConfig, resubmit_config: DockerResubmitConfig):

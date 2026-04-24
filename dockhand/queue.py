@@ -4,9 +4,10 @@ import re
 from dockhand.client.base import Client
 
 
-def ts_submit(client: Client, docker_cmd: str, cwd: str) -> int:
+def ts_submit(client: Client, docker_cmd: str, cwd: str, slots: int = 1) -> int:
     """Submit a docker command to task spooler. Returns the ts job ID."""
-    returncode, stdout = client.run(f"tsp {docker_cmd}", cwd=cwd, capture=True)
+    slots_flag = f"-N {slots} " if slots > 1 else ""
+    returncode, stdout = client.run(f"tsp {slots_flag}{docker_cmd}", cwd=cwd, capture=True)
     if returncode != 0:
         from dockhand.error import error_and_exit
 
