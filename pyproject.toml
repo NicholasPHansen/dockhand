@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dockhand"
-version = "0.1.0"
+version = "0.2.0"
 description = "CLI for managing Docker containers on remote machines"
 readme = "README.md"
 license = { text = "MIT" }

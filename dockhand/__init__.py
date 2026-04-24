@@ -13,7 +13,7 @@ from dockhand.run import execute_queued_run, execute_resubmit, execute_run, exec
 from dockhand.tunnel import execute_tunnel
 from dockhand.volumes import execute_volumes
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 cli = typer.Typer(pretty_exceptions_show_locals=False)
 
