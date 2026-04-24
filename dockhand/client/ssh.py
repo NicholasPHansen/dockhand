@@ -6,13 +6,13 @@ from dockhand.constants import CONFIG_FILENAME
 
 
 class SSHClient(Client):
-    def __init__(self):
+    def __init__(self, hostname: str | None = None):
         super().__init__()
 
         cli_config.check_ssh(msg=f"Please provide a SSH configuration in '{CONFIG_FILENAME}'.")
 
         self.client = fabric.Connection(
-            host=cli_config.ssh.hostname,
+            host=hostname or cli_config.ssh.hostname,
             user=cli_config.ssh.user,
             connect_kwargs={"key_filename": cli_config.ssh.identityfile},
         )

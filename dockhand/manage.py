@@ -5,7 +5,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from dockhand.client import get_client
+from dockhand.client import get_client, get_client_for_host
 from dockhand.config import DockerConfig, cli_config
 from dockhand.error import error_and_exit
 from dockhand.history import get_history_entry, load_history, save_history
@@ -96,7 +96,8 @@ def execute_logs(
     else:
         cmd = f"cat $(tsp -o {ts_job_id})"
 
-    with get_client() as client:
+    host = entry.get("host", "localhost")
+    with get_client_for_host(host) as client:
         returncode, _ = client.run(cmd, cwd=cli_config.remote_path)
     if returncode != 0:
         error_and_exit(f"Could not read logs for job #{local_id}. The job may still be queued and not yet started.")
@@ -106,8 +107,9 @@ def execute_stop(config: DockerConfig, *, job_id: int | None = None):
     """Stop a running job or cancel a queued one."""
     local_id, entry = _resolve_entry(job_id)
     ts_job_id = entry["ts_job_id"]
+    host = entry.get("host", "localhost")
 
-    with get_client() as client:
+    with get_client_for_host(host) as client:
         job = ts_get_job(client, ts_job_id, cwd=cli_config.remote_path)
 
         if job is None:
@@ -135,13 +137,14 @@ def execute_remove(
         job_ids = [history[-1]["local_id"]]
 
     removed = []
-    with get_client() as client:
-        for local_id in job_ids:
-            entry = get_history_entry(local_id)
-            if entry is None:
-                typer.echo(f"Job #{local_id} not found in history.")
-                continue
-            ts_job_id = entry["ts_job_id"]
+    for local_id in job_ids:
+        entry = get_history_entry(local_id)
+        if entry is None:
+            typer.echo(f"Job #{local_id} not found in history.")
+            continue
+        ts_job_id = entry["ts_job_id"]
+        host = entry.get("host", "localhost")
+        with get_client_for_host(host) as client:
             job = ts_get_job(client, ts_job_id, cwd=cli_config.remote_path)
             if job and job["state"] != "queued":
                 error_and_exit(

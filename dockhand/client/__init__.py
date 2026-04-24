@@ -25,3 +25,14 @@ def get_client() -> Client:
         return LocalClient()
     else:
         return SSHClient()
+
+
+def get_client_for_host(hostname: str) -> Client:
+    """Return a client connected to a specific host (e.g. from job history).
+
+    Uses SSH credentials from config but overrides the hostname. Falls back
+    to LocalClient if the hostname resolves to localhost.
+    """
+    if _is_localhost(hostname):
+        return LocalClient()
+    return SSHClient(hostname=hostname)
