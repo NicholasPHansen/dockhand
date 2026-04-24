@@ -1,4 +1,5 @@
 """Docker volume inspection and path resolution."""
+
 from rich.console import Console
 from rich.tree import Tree
 
@@ -87,7 +88,7 @@ def execute_volumes(
     docker_cmd = " ".join(["docker", "run", "--rm", *volume_flags, imagename, find_cmd])
 
     with get_client() as client:
-        exit_code, stdout = client.run(docker_cmd, cwd=cli_config.remote_path)
+        exit_code, stdout = client.run(docker_cmd, cwd=cli_config.remote_path, capture=True)
 
     tree = Tree(f"[bold]{workdir}[/bold]")
 
