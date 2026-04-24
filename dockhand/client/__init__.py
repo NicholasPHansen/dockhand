@@ -1,5 +1,4 @@
 import socket
-import subprocess
 
 from dockhand.client.base import Client
 from dockhand.client.local import LocalClient

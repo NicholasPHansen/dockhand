@@ -137,11 +137,7 @@ def execute_submit(
     gpus = gpus if gpus is not None else config.gpus
 
     execute_build(config, sync, dockerfile=dockerfile, imagename=imagename)
-
-    if cli_config.queue.enabled:
-        execute_queued_run(config, commands, imagename=imagename, gpus=gpus, ports=ports, urgent=urgent)
-    else:
-        execute_run(config, commands, imagename=imagename, gpus=gpus, ports=ports)
+    execute_queued_run(config, commands, imagename=imagename, gpus=gpus, ports=ports, urgent=urgent)
 
 
 def execute_resubmit(docker_config: DockerConfig, resubmit_config: DockerResubmitConfig):
@@ -153,30 +149,17 @@ def execute_resubmit(docker_config: DockerConfig, resubmit_config: DockerResubmi
     if not history:
         error_and_exit("No docker history found. Submit a docker job first.")
 
-    entry = None
-
-    if cli_config.queue.enabled:
-        # Look up by ts job ID
-        job_id = int(resubmit_config.container_id) if resubmit_config.container_id else None
-        if job_id is not None:
-            entry = get_history_entry_by_job_id(job_id)
-            if entry is None:
-                error_and_exit(f"Job ID '{job_id}' not found in history.")
-        else:
-            # Default to latest queued entry
-            queued = [e for e in history if e.get("ts_job_id") is not None]
-            if not queued:
-                error_and_exit("No queued job history found.")
-            entry = queued[-1]
-    else:
-        # Look up by container ID
-        container_id = resubmit_config.container_id or history[-1]["container_id"]
-        for hist_entry in history:
-            if hist_entry.get("container_id") == container_id:
-                entry = hist_entry
-                break
+    # Look up by ts job ID
+    job_id = int(resubmit_config.container_id) if resubmit_config.container_id else None
+    if job_id is not None:
+        entry = get_history_entry_by_job_id(job_id)
         if entry is None:
-            error_and_exit(f"Container ID '{container_id}' not found in history.")
+            error_and_exit(f"Job ID '{job_id}' not found in history.")
+    else:
+        queued = [e for e in history if e.get("ts_job_id") is not None]
+        if not queued:
+            error_and_exit("No job history found.")
+        entry = queued[-1]
 
     original_config = entry["config"]
 

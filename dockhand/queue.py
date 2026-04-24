@@ -6,7 +6,7 @@ from dockhand.client.base import Client
 
 def ts_submit(client: Client, docker_cmd: str, cwd: str) -> int:
     """Submit a docker command to task spooler. Returns the ts job ID."""
-    returncode, stdout = client.run(f"tsp {docker_cmd}", cwd=cwd)
+    returncode, stdout = client.run(f"tsp {docker_cmd}", cwd=cwd, capture=True)
     if returncode != 0:
         from dockhand.error import error_and_exit
 
@@ -21,7 +21,7 @@ def ts_submit(client: Client, docker_cmd: str, cwd: str) -> int:
 
 def ts_list(client: Client, cwd: str) -> list[dict]:
     """List all task spooler jobs. Returns a list of parsed job dicts."""
-    returncode, stdout = client.run("tsp -l", cwd=cwd)
+    returncode, stdout = client.run("tsp -l", cwd=cwd, capture=True)
     if returncode != 0:
         return []
     return _parse_ts_list(stdout)
@@ -29,19 +29,19 @@ def ts_list(client: Client, cwd: str) -> list[dict]:
 
 def ts_make_urgent(client: Client, job_id: int, cwd: str) -> bool:
     """Move a queued job to the front of the queue. Returns True on success."""
-    returncode, _ = client.run(f"tsp -u {job_id}", cwd=cwd)
+    returncode, _ = client.run(f"tsp -u {job_id}", cwd=cwd, capture=True)
     return returncode == 0
 
 
 def ts_remove(client: Client, job_id: int, cwd: str) -> bool:
     """Remove a pending job from the queue. Returns True on success."""
-    returncode, _ = client.run(f"tsp -r {job_id}", cwd=cwd)
+    returncode, _ = client.run(f"tsp -r {job_id}", cwd=cwd, capture=True)
     return returncode == 0
 
 
 def ts_kill(client: Client, job_id: int, cwd: str) -> bool:
     """Send SIGTERM to a running job. Returns True on success."""
-    returncode, _ = client.run(f"tsp -k {job_id}", cwd=cwd)
+    returncode, _ = client.run(f"tsp -k {job_id}", cwd=cwd, capture=True)
     return returncode == 0
 
 
@@ -51,7 +51,7 @@ def ts_get_container_id(client: Client, job_id: int, cwd: str) -> str | None:
     docker run -d writes the full container ID to stdout, which ts captures.
     ts -o <id> returns the path to that output file.
     """
-    returncode, stdout = client.run(f"cat $(tsp -o {job_id})", cwd=cwd)
+    returncode, stdout = client.run(f"cat $(tsp -o {job_id})", cwd=cwd, capture=True)
     if returncode != 0 or not stdout.strip():
         return None
     # docker run -d outputs a 64-char hex ID; take the first 12 chars
