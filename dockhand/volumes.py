@@ -33,7 +33,7 @@ def _resolve_to_host(relative_path: str, config: DockerConfig) -> tuple[str, str
     the code mount (project root → containerworkdir).
     """
     workdir = config.containerworkdir.rstrip("/")
-    for volume in (config.volumes or []):
+    for volume in config.volumes or []:
         containerpath = volume["containerpath"].rstrip("/")
         hostpath = volume["hostpath"].rstrip("/")
         vol_relative = _workdir_relative(containerpath, workdir)
@@ -123,20 +123,22 @@ def execute_volumes(
             hostpath = mount["hostpath"].rstrip("/")
             containerpath = mount["containerpath"].rstrip("/")
 
-            cmd = f"find {hostpath} -maxdepth {scan_depth} \\( {_PRUNE_EXPR} \\) -prune -o -type f -print 2>/dev/null"
+            # cd into hostpath so find outputs relative paths (./a/b/file) — avoids
+            # any prefix-stripping issues caused by tilde expansion or symlinks.
+            # Replace ~ with $HOME so it expands inside bash -l -c "...".
+            hostpath_cmd = hostpath.replace("~", "$HOME")
+            find = f"find . -maxdepth {scan_depth} \\( {_PRUNE_EXPR} \\) -prune -o -type f -print 2>/dev/null"
+            cmd = f"cd {hostpath_cmd} && {find}"
             exit_code, stdout = client.run(cmd, cwd=None, capture=True)
 
             if exit_code != 0 or not stdout.strip():
                 continue
 
             for line in stdout.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                if line.startswith(hostpath + "/"):
-                    container_paths.append(containerpath + "/" + line[len(hostpath) + 1 :])
-                elif line != hostpath:
-                    container_paths.append(containerpath + "/" + line)
+                # find . outputs ./relative/path — strip the leading ./
+                rel = line.strip().removeprefix("./")
+                if rel:
+                    container_paths.append(containerpath + "/" + rel)
 
     tree = Tree(f"[bold]{workdir}[/bold]")
     if not container_paths:
