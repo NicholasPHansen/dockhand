@@ -1,7 +1,6 @@
 """Docker container lifecycle management (logs, stop, remove, stats)."""
 import typer
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 from rich.text import Text
 
@@ -10,7 +9,6 @@ from dockhand.config import DockerConfig, cli_config
 from dockhand.error import error_and_exit
 from dockhand.history import load_history, save_history
 from dockhand.queue import (
-    ts_get_container_id,
     ts_get_job,
     ts_kill,
     ts_list,
@@ -61,14 +59,9 @@ def execute_logs(
     config: DockerConfig,
     *,
     job_id: int | None,
-    container_id: str | None,
-    imagename: str | None,
-    all: bool,
     n: int | None,
 ):
-    """Show logs from a job."""
-    imagename = imagename or config.imagename
-
+    """Show logs from a job via tsp output file."""
     if job_id is None:
         history = load_history()
         queued = [e for e in history if e.get("ts_job_id") is not None]
@@ -76,23 +69,18 @@ def execute_logs(
             error_and_exit("No job history found. Provide a job ID.")
         job_id = queued[-1]["ts_job_id"]
 
-    with get_client() as client:
-        container_id = ts_get_container_id(client, job_id, cwd=cli_config.remote_path)
+    if n is not None:
+        cmd = f"tail -n {n} $(tsp -o {job_id})"
+    else:
+        cmd = f"cat $(tsp -o {job_id})"
 
-    if not container_id:
+    with get_client() as client:
+        returncode, _ = client.run(cmd, cwd=cli_config.remote_path)
+    if returncode != 0:
         error_and_exit(
-            f"Could not get container ID for job {job_id}. "
+            f"Could not read logs for job {job_id}. "
             "The job may still be queued and not yet started."
         )
-
-    cmd = ["journalctl", f"IMAGE_NAME={imagename}", "-o cat", "--all"]
-    cmd.append(f"CONTAINER_ID={container_id}")
-
-    if n is not None:
-        cmd.append(f"-n {n}")
-
-    with get_client() as client:
-        client.run(" ".join(cmd), cwd=cli_config.remote_path)
 
 
 def execute_stop(config: DockerConfig, *, job_id: int | None = None, container_id: str | None = None):
@@ -117,22 +105,10 @@ def execute_stop(config: DockerConfig, *, job_id: int | None = None, container_i
                 error_and_exit(f"Failed to remove job {job_id}.")
 
         elif job["state"] == "running":
-            resolved_id = ts_get_container_id(client, job_id, cwd=cli_config.remote_path)
-            if resolved_id:
-                with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
-                    task = progress.add_task(description="Stopping container", total=None)
-                    returncode, _ = client.run(
-                        f"docker container stop {resolved_id}", cwd=cli_config.remote_path
-                    )
-                    progress.update(task, completed=True)
-                if returncode != 0:
-                    error_and_exit("Stop command failed.")
-                typer.echo(f"Stopped job {job_id} (container {resolved_id}).")
+            if ts_kill(client, job_id, cwd=cli_config.remote_path):
+                typer.echo(f"Stopped job {job_id}.")
             else:
-                if ts_kill(client, job_id, cwd=cli_config.remote_path):
-                    typer.echo(f"Killed job {job_id}.")
-                else:
-                    error_and_exit(f"Failed to kill job {job_id}.")
+                error_and_exit(f"Failed to stop job {job_id}.")
         else:
             typer.echo(f"Job {job_id} is already {job['state']}.")
 

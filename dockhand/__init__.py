@@ -113,18 +113,16 @@ def install(
 
 @cli.command()
 def logs(
-    imagename: Annotated[str, typer.Option(default_factory=DockerDefault("imagename"))],
     id: Annotated[
         str | None,
         typer.Argument(help="Job ID. Defaults to last job."),
     ] = None,
-    all: bool = False,
     n: int | None = None,
 ):
     """Show logs from a job (defaults to last)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     job_id = int(id) if id is not None else None
-    execute_logs(cli_config.docker, job_id=job_id, container_id=None, imagename=imagename, all=all, n=n)
+    execute_logs(cli_config.docker, job_id=job_id, n=n)
 
 
 @cli.command()

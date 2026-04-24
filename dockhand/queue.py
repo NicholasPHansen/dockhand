@@ -45,19 +45,6 @@ def ts_kill(client: Client, job_id: int, cwd: str) -> bool:
     return returncode == 0
 
 
-def ts_get_container_id(client: Client, job_id: int, cwd: str) -> str | None:
-    """Get the short (12-char) container ID from ts job output.
-
-    docker run -d writes the full container ID to stdout, which ts captures.
-    ts -o <id> returns the path to that output file.
-    """
-    returncode, stdout = client.run(f"cat $(tsp -o {job_id})", cwd=cwd, capture=True)
-    if returncode != 0 or not stdout.strip():
-        return None
-    # docker run -d outputs a 64-char hex ID; take the first 12 chars
-    container_id = stdout.strip()[:12]
-    return container_id if len(container_id) == 12 else None
-
 
 def ts_get_job(client: Client, job_id: int, cwd: str) -> dict | None:
     """Look up a single job by ID from ts -l. Returns None if not found."""

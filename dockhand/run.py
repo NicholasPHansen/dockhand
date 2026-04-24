@@ -13,34 +13,6 @@ from dockhand.error import error_and_exit
 from dockhand.history import add_to_history
 
 
-def execute_run(
-    config: DockerConfig,
-    commands: List[str],
-    imagename: str | None = None,
-    gpus: str | None = None,
-    ports: list[str] | None = None,
-):
-    """Run a container from an already-built image."""
-    imagename = imagename or config.imagename
-    gpus = gpus if gpus is not None else config.gpus
-    effective_ports = ports if ports is not None else config.ports
-
-    cmd = _build_docker_run_cmd(config, commands, imagename, gpus, effective_ports)
-
-    with get_client() as client:
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
-            task = progress.add_task(description="Starting container", total=None)
-            returncode, stdout = client.run(cmd, cwd=cli_config.remote_path)
-            progress.update(task, completed=True)
-
-    if returncode != 0:
-        error_and_exit(f"Run command failed with return code {returncode}.")
-
-    container_id = stdout[:12]
-    host = cli_config.ssh.hostname if cli_config.ssh else "localhost"
-    add_to_history(config, container_id, commands, branch=_get_branch(), ports=effective_ports, host=host)
-
-
 def _build_docker_run_cmd(
     config: DockerConfig,
     commands: List[str],
@@ -60,9 +32,7 @@ def _build_docker_run_cmd(
         [
             "docker",
             "run",
-            "--log-driver=journald",
             "--rm",
-            "-d",
             *volumes,
             *gpu_flags,
             *port_flags,
