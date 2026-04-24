@@ -4,7 +4,7 @@ from rich.console import Console
 from rich.tree import Tree
 
 from dockhand.client import get_client
-from dockhand.config import DockerConfig, cli_config
+from dockhand.config import DockerConfig
 
 
 def _workdir_relative(containerpath: str, workdir: str) -> str:
@@ -75,27 +75,38 @@ def execute_volumes(
     imagename: str | None = None,
     volumes: list | None = None,
 ) -> None:
-    """Spin up a temporary container and list its full filesystem as a tree."""
-    imagename = imagename or config.imagename
+    """List volume files as they appear inside the container, rooted at containerworkdir."""
     volumes = volumes if volumes is not None else (config.volumes or [])
-    workdir = config.containerworkdir or "/"
-
-    volume_flags = [f"-v {v['hostpath']}:{v['containerpath']}:{v['permissions']}" for v in volumes]
+    workdir = (config.containerworkdir or "/").rstrip("/") or "/"
 
     maxdepth = f"-maxdepth {depth} " if depth is not None else ""
-    find_cmd = f"find {workdir} {maxdepth}-type f 2>/dev/null"
 
-    docker_cmd = " ".join(["docker", "run", "--rm", *volume_flags, imagename, find_cmd])
+    container_paths: list[str] = []
 
     with get_client() as client:
-        exit_code, stdout = client.run(docker_cmd, cwd=cli_config.remote_path, capture=True)
+        for volume in volumes:
+            hostpath = volume["hostpath"].rstrip("/")
+            containerpath = volume["containerpath"].rstrip("/")
+
+            command = f"find {hostpath} {maxdepth}-type f 2>/dev/null"
+            exit_code, stdout = client.run(command, cwd=None, capture=True)
+
+            if exit_code != 0 or not stdout.strip():
+                continue
+
+            for line in stdout.strip().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith(hostpath + "/"):
+                    container_paths.append(containerpath + "/" + line[len(hostpath) + 1 :])
+                elif line != hostpath:
+                    container_paths.append(containerpath + "/" + line)
 
     tree = Tree(f"[bold]{workdir}[/bold]")
-
-    if exit_code != 0 or not stdout.strip():
-        tree.add("[dim](empty or image not built)[/dim]")
+    if not container_paths:
+        tree.add("[dim](empty or inaccessible)[/dim]")
     else:
-        lines = [line for line in stdout.strip().splitlines() if line.strip()]
-        _dict_to_rich_tree(_build_tree(lines, workdir), tree)
+        _dict_to_rich_tree(_build_tree(container_paths, workdir), tree)
 
     Console().print(tree)
