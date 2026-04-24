@@ -8,7 +8,7 @@ from dockhand.error import error_and_exit
 def execute_resubmit(docker_config: DockerConfig, resubmit_config: DockerResubmitConfig):
     """Resubmit a previous docker run with optional overrides."""
     from dockhand.history import get_history_entry, load_history
-    from dockhand.submit import execute_queued_run
+    from dockhand.submit import execute_submit
 
     history = load_history()
 
@@ -31,4 +31,4 @@ def execute_resubmit(docker_config: DockerConfig, resubmit_config: DockerResubmi
 
     updated_config = dataclasses.replace(docker_config, imagename=imagename, gpus=gpus)
 
-    execute_queued_run(updated_config, commands, imagename=imagename, gpus=gpus)
+    execute_submit(updated_config, commands, sync=False, imagename=imagename, gpus=gpus)

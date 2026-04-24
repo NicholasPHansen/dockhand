@@ -11,7 +11,7 @@ from dockhand.history import execute_history
 from dockhand.manage import execute_logs, execute_remove, execute_stats, execute_stop
 from dockhand.queue import ts_make_urgent
 from dockhand.resubmit import execute_resubmit
-from dockhand.submit import execute_queued_run, execute_submit
+from dockhand.submit import execute_submit
 from dockhand.tunnel import execute_tunnel
 from dockhand.volumes import execute_volumes
 
@@ -94,10 +94,11 @@ def run(
     urgent: Annotated[bool, typer.Option("--urgent", help="Move to front of queue.")] = False,
     slots: Annotated[int, typer.Option("--slots", help="Queue slots to reserve (e.g. number of CPUs).")] = None,
 ):
-    """Queue a container run from an already-built image."""
+    """Queue a container run without syncing code first."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_queued_run(
-        cli_config.docker, commands, imagename=imagename, gpus=gpus, ports=ports or None, urgent=urgent, slots=slots
+    execute_submit(
+        cli_config.docker, commands, sync=False,
+        imagename=imagename, gpus=gpus, ports=ports or None, urgent=urgent, slots=slots,
     )
 
 

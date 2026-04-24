@@ -58,17 +58,21 @@ def _get_branch() -> str | None:
         return None
 
 
-def execute_queued_run(
+def execute_submit(
     config: DockerConfig,
     commands: List[str],
+    sync: bool,
     imagename: str | None = None,
     gpus: str | None = None,
     ports: list[str] | None = None,
     urgent: bool = False,
     slots: int | None = None,
 ) -> int:
-    """Submit a container run to the task spooler queue. Returns the local job ID."""
+    """Optionally sync code, then queue a container run. Returns the local job ID."""
     from dockhand.queue import ts_make_urgent, ts_submit
+
+    if sync:
+        execute_sync(confirm_changes=True)
 
     imagename = imagename or config.imagename
     gpus = gpus if gpus is not None else config.gpus
@@ -98,19 +102,3 @@ def execute_queued_run(
     label = "urgent job" if urgent else "job"
     typer.echo(f"Queued {label} #{local_id}")
     return local_id
-
-
-def execute_submit(
-    config: DockerConfig,
-    commands: List[str],
-    sync: bool,
-    imagename: str | None = None,
-    gpus: str | None = None,
-    ports: list[str] | None = None,
-    urgent: bool = False,
-    slots: int | None = None,
-):
-    """Sync code and queue a container run with the given command(s)."""
-    if sync:
-        execute_sync(confirm_changes=True)
-    execute_queued_run(config, commands, imagename=imagename, gpus=gpus, ports=ports, urgent=urgent, slots=slots)
