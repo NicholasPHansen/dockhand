@@ -69,6 +69,7 @@ def submit(
     sync: Annotated[bool, typer.Option(default_factory=SyncDefault())],
     ports: Annotated[List[str], typer.Option("-p")] = [],
     urgent: Annotated[bool, typer.Option("--urgent", help="Move to front of queue.")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show docker build output.")] = False,
 ):
     """Build the image and queue a container run with the given command(s)."""
     msg = f"docker requires a Docker configuration in '{CONFIG_FILENAME}'"
@@ -82,6 +83,7 @@ def submit(
         gpus=gpus,
         ports=ports or None,
         urgent=urgent,
+        verbose=verbose,
     )
 
 
@@ -103,10 +105,11 @@ def install(
     dockerfile: Annotated[str, typer.Option(default_factory=DockerDefault("dockerfile"))],
     imagename: Annotated[str, typer.Option(default_factory=DockerDefault("imagename"))],
     sync: Annotated[bool, typer.Option(default_factory=SyncDefault())],
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show docker build output.")] = False,
 ):
     """Install (build) the Docker image."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_build(cli_config.docker, sync=sync, dockerfile=dockerfile, imagename=imagename)
+    execute_build(cli_config.docker, sync=sync, dockerfile=dockerfile, imagename=imagename, verbose=verbose)
 
 
 @cli.command()

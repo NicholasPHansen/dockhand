@@ -99,13 +99,14 @@ def execute_submit(
     gpus: str | None = None,
     ports: list[str] | None = None,
     urgent: bool = False,
+    verbose: bool = False,
 ):
     """Build the image and run a container (or queue it) with the given command(s)."""
     dockerfile = dockerfile or config.dockerfile
     imagename = imagename or config.imagename
     gpus = gpus if gpus is not None else config.gpus
 
-    execute_build(config, sync, dockerfile=dockerfile, imagename=imagename)
+    execute_build(config, sync, dockerfile=dockerfile, imagename=imagename, verbose=verbose)
     execute_queued_run(config, commands, imagename=imagename, gpus=gpus, ports=ports, urgent=urgent)
 
 

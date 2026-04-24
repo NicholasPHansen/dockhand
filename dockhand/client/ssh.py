@@ -22,11 +22,12 @@ class SSHClient(Client):
 
     def run(self, command: str, cwd: str | None = None, capture: bool = False) -> tuple[int, str]:
         command = f'bash -l -c "{command}"'
+        hide = "both" if capture else None
         if cwd is not None:
             with self.client.cd(cwd):
-                result = self.client.run(command, warn=True)
+                result = self.client.run(command, warn=True, hide=hide)
         else:
-            result = self.client.run(command, warn=True)
+            result = self.client.run(command, warn=True, hide=hide)
         return result.exited, result.stdout
 
     def remove(self, path: str):
