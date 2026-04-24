@@ -10,6 +10,10 @@ from dockhand.config import DockerConfig, cli_config
 # Keeps the find command fast on large volumes; use --depth N to go deeper.
 DEFAULT_SCAN_DEPTH = 5
 
+# Directories pruned from every find scan.
+_PRUNE_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules", ".mypy_cache", ".ruff_cache", ".pytest_cache"}
+_PRUNE_EXPR = " -o ".join(f"-name {d}" for d in sorted(_PRUNE_DIRS))
+
 
 def _workdir_relative(containerpath: str, workdir: str) -> str:
     """Convert an absolute container path to a workdir-relative path."""
@@ -103,16 +107,14 @@ def execute_volumes(
 
     # Build the full list of mounts: code mount first, then data volumes.
     # The code mount maps the local project root to containerworkdir, exactly as submit does.
-    mounts = []
+    mounts: list[dict] = []
     if cli_config.remote_path:
         mounts.append({"hostpath": cli_config.remote_path, "containerpath": workdir})
     mounts.extend(volumes)
 
-    # Scan depth: depth+1 ensures folder nodes at the display limit are non-empty
-    # (they have file children one level deeper, so they appear as branches not leaves).
+    # Scan depth for find: depth+1 ensures folder nodes at the display limit are non-empty.
     # Without --depth, use DEFAULT_SCAN_DEPTH to keep find fast on large volumes.
     scan_depth = depth + 1 if depth is not None else DEFAULT_SCAN_DEPTH
-    maxdepth_flag = f"-maxdepth {scan_depth}"
 
     container_paths: list[str] = []
 
@@ -121,14 +123,13 @@ def execute_volumes(
             hostpath = mount["hostpath"].rstrip("/")
             containerpath = mount["containerpath"].rstrip("/")
 
-            exit_code, stdout = client.run(
-                f"find {hostpath} {maxdepth_flag} -type f 2>/dev/null", cwd=None, capture=True
-            )
+            cmd = f"find {hostpath} -maxdepth {scan_depth} \\( {_PRUNE_EXPR} \\) -prune -o -type f -print 2>/dev/null"
+            exit_code, stdout = client.run(cmd, cwd=None, capture=True)
 
             if exit_code != 0 or not stdout.strip():
                 continue
 
-            for line in stdout.strip().splitlines():
+            for line in stdout.splitlines():
                 line = line.strip()
                 if not line:
                     continue
