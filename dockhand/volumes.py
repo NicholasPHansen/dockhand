@@ -4,7 +4,7 @@ from rich.console import Console
 from rich.tree import Tree
 
 from dockhand.client import get_client
-from dockhand.config import DockerConfig
+from dockhand.config import DockerConfig, cli_config
 
 
 def _workdir_relative(containerpath: str, workdir: str) -> str:
@@ -55,16 +55,23 @@ def _build_tree(paths: list[str], strip_prefix: str) -> dict:
     return root
 
 
-def _dict_to_rich_tree(d: dict, tree: Tree) -> None:
+def _dict_to_rich_tree(d: dict, tree: Tree, remaining_depth: int | None = None) -> None:
     """Recursively populate a rich Tree from a nested dict.
 
     Directories (non-empty children) are listed before files, sorted alphabetically.
+    remaining_depth: how many more directory levels to expand fully; None = unlimited.
+    Directories at the limit are shown with a '...' child to signal truncated content.
     """
     dirs = {k: v for k, v in d.items() if v}
     files = {k: v for k, v in d.items() if not v}
     for name in sorted(dirs):
         branch = tree.add(f"[bold blue]{name}/[/bold blue]")
-        _dict_to_rich_tree(dirs[name], branch)
+        if remaining_depth is None:
+            _dict_to_rich_tree(dirs[name], branch, None)
+        elif remaining_depth > 1:
+            _dict_to_rich_tree(dirs[name], branch, remaining_depth - 1)
+        else:
+            branch.add("[dim]...[/dim]")
     for name in sorted(files):
         tree.add(name)
 
@@ -79,17 +86,21 @@ def execute_volumes(
     volumes = volumes if volumes is not None else (config.volumes or [])
     workdir = (config.containerworkdir or "/").rstrip("/") or "/"
 
-    maxdepth = f"-maxdepth {depth} " if depth is not None else ""
+    # Build the full list of mounts: code mount first, then data volumes.
+    # The code mount maps the local project root to containerworkdir, exactly as submit does.
+    mounts = []
+    if cli_config.remote_path:
+        mounts.append({"hostpath": cli_config.remote_path, "containerpath": workdir})
+    mounts.extend(volumes)
 
     container_paths: list[str] = []
 
     with get_client() as client:
-        for volume in volumes:
-            hostpath = volume["hostpath"].rstrip("/")
-            containerpath = volume["containerpath"].rstrip("/")
+        for mount in mounts:
+            hostpath = mount["hostpath"].rstrip("/")
+            containerpath = mount["containerpath"].rstrip("/")
 
-            command = f"find {hostpath} {maxdepth}-type f 2>/dev/null"
-            exit_code, stdout = client.run(command, cwd=None, capture=True)
+            exit_code, stdout = client.run(f"find {hostpath} -type f 2>/dev/null", cwd=None, capture=True)
 
             if exit_code != 0 or not stdout.strip():
                 continue
@@ -107,6 +118,6 @@ def execute_volumes(
     if not container_paths:
         tree.add("[dim](empty or inaccessible)[/dim]")
     else:
-        _dict_to_rich_tree(_build_tree(container_paths, workdir), tree)
+        _dict_to_rich_tree(_build_tree(container_paths, workdir), tree, remaining_depth=depth)
 
     Console().print(tree)
