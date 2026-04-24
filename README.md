@@ -205,20 +205,30 @@ The default slot count can also be set in `.dockhand.json` so it applies to ever
 
 ## Volumes
 
-The `volumes` command spins up a temporary container (`docker run --rm`) with your configured mounts and lists the full filesystem as a tree — including files baked into the image, not just mounted paths.
+The `volumes` command lists the container filesystem as a unified tree rooted at `containerworkdir`. It searches the code mount (project root → `containerworkdir`) and all configured data volumes on the host directly — no running container required. Files appear at their container paths.
 
 ```bash
-# Show full container filesystem
+# Show container filesystem (default depth: 5 levels)
 dockhand volumes
 
-# Limit depth
+# Expand to a specific depth; folders at the limit show as collapsed with ...
 dockhand volumes --depth 3
 
-# Show filesystem for a specific job
+# Show filesystem for a specific past job
 dockhand volumes 42
 
 # Same via download --list
 dockhand download --list --depth 2
+```
+
+The `download` command resolves any workdir-relative path (as shown by `volumes`) back to its host location and downloads it via rsync. Directory downloads preserve the full path structure locally.
+
+```bash
+# Download a file
+dockhand download results/model.pth
+
+# Download a directory (trailing slash) — files land in reports/figures/ locally
+dockhand download reports/figures/
 ```
 
 ## Configuration

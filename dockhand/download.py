@@ -18,11 +18,19 @@ def execute_download(config: DockerConfig, path: str, local_path: str | None = N
     host_path, _ = result
     ssh = cli_config.ssh
 
-    # If no local_path provided, compute it from the workdir-relative path
+    # If no local_path provided, mirror the remote path structure locally.
+    # For directory downloads (trailing slash), use the directory itself as the destination
+    # so rsync places contents at reports/figures/ rather than reports/.
+    # For file downloads, use the parent directory so rsync places the file correctly.
     if local_path is None:
-        parent_dir = cli_config.project_root / Path(path).parent
-        parent_dir.mkdir(parents=True, exist_ok=True)
-        local_path = str(parent_dir)
+        if path.endswith("/"):
+            dest = cli_config.project_root / Path(path.rstrip("/"))
+            dest.mkdir(parents=True, exist_ok=True)
+            local_path = str(dest)
+        else:
+            parent_dir = cli_config.project_root / Path(path).parent
+            parent_dir.mkdir(parents=True, exist_ok=True)
+            local_path = str(parent_dir)
 
     with Progress(
         SpinnerColumn(),
