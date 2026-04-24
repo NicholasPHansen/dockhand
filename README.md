@@ -8,20 +8,20 @@ A CLI tool for managing Docker containers on remote machines. Build, run, and ma
 
 Managing Docker workloads across multiple machines is painful: keeping code in sync, remembering which version runs where, handling build/run/debug cycles remotely.
 
-`dockhand` solves this by letting you manage everything from your laptop - code syncs automatically, builds happen on the remote, and you track history locally, and after running you can download results back. No more juggling multiple git repos or SSH sessions.
+`dockhand` solves this by letting you manage everything from your laptop — code syncs automatically, builds happen on the remote, and results can be downloaded back. No more juggling multiple git repos or SSH sessions.
 
 This project is *heavily* inspired by the awesome work from @ChrisFugl's [DTU-HPC-CLI](https://github.com/ChrisFugl/DTU-HPC-CLI).
 
 ## Features
 
-- **Job Queue**: Submit workloads to a [task spooler](https://viric.name/soft/ts/) queue so jobs run in order without stepping on each other
+- **Job Queue**: All workloads are submitted through [task spooler](https://viric.name/soft/ts/) so jobs run in order without competing for resources
+- **Slot Reservations**: Declare how many CPU slots a job needs so heavy jobs don't block each other
 - **Remote Docker Management**: Build and run Docker containers on a remote machine via SSH
 - **Local or Remote**: Automatically detect localhost vs remote, or explicitly configure
-- **Job Queue**: Optional [task spooler](https://viric.name/soft/ts/) integration — submit jobs to a shared queue so they run in order across multiple users
 - **Port Forwarding**: Establish SSH tunnels to access container ports locally
 - **File Syncing**: Automatically sync your local code to the remote before building
 - **Volume Management**: Mount local directories into containers and download files back
-- **Job History**: Track all runs with local job IDs that are stable across hosts
+- **Stable Job IDs**: Local job IDs increment independently of the host, so IDs are unambiguous across machines
 - **Quick Resubmit**: Easily rerun previous jobs with the same or different parameters
 
 ## Requirements
@@ -35,7 +35,7 @@ This project is *heavily* inspired by the awesome work from @ChrisFugl's [DTU-HP
 
 - [Docker](https://docs.docker.com/engine/install/) — container runtime
 - [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (`nvidia-docker`) — required only if using GPUs (`--gpus`)
-- [task spooler (`tsp`)](https://viric.name/soft/ts/) — job queue daemon; jobs submitted via `dockhand` are queued through `tsp`
+- [task spooler (`tsp`)](https://viric.name/soft/ts/) — job queue daemon
 
 Installing task spooler on Ubuntu/Debian:
 
@@ -45,11 +45,20 @@ sudo apt-get install task-spooler
 
 On other systems the binary may be called `ts` instead of `tsp` — check your package manager.
 
+**Configuring the total slot count** (optional, recommended for multi-user setups):
+
+```bash
+# Set the number of available slots to match CPU cores (run once on the host)
+tsp -S 16
+```
+
+Jobs default to 1 slot each. Use `--slots` to reserve more (see [Slot Reservations](#slot-reservations)).
+
 ## Installation
 
 **From source with uv (recommended):**
 
-uv provides fast, reliable dependency resolution and lock file management. [Install uv](https://docs.astral.sh/uv/):
+[Install uv](https://docs.astral.sh/uv/):
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -72,7 +81,7 @@ pip install dockhand
 
 ## Usage
 
-All commands work with the same `.dockhand.json` configuration file format. See [Configuration](#configuration) below.
+All commands work with the same `.dockhand.json` configuration file. See [Configuration](#configuration) below.
 
 ### Available Commands
 
@@ -92,7 +101,7 @@ All commands work with the same `.dockhand.json` configuration file format. See 
 | `resubmit` | Resubmit a previous job with optional overrides |
 | `tunnel` | Forward container ports to localhost via SSH tunnel |
 
-All commands that take a job ID default to the most recent job if no ID is provided.
+All commands that accept a job ID default to the most recent job if no ID is given.
 
 ### Examples
 
@@ -100,10 +109,16 @@ All commands that take a job ID default to the most recent job if no ID is provi
 # Build image and queue a run
 dockhand submit 'python train.py --epochs 10'
 
+# Show build output while building
+dockhand submit -v 'python train.py'
+
+# Reserve 4 CPU slots for a parallel job
+dockhand submit --slots 4 'python train.py --workers 4'
+
 # Queue a run with GPUs and port mappings
 dockhand submit --gpus all -p 6006:6006 'python train.py'
 
-# Queue a run from an already-built image
+# Queue a run from an already-built image (skip build)
 dockhand run 'python train.py --epochs 20'
 
 # Build image only
@@ -136,12 +151,8 @@ dockhand tunnel
 # See all past runs
 dockhand history
 
-# Browse mounted volumes
+# Browse mounted volumes as a tree
 dockhand volumes --depth 2
-
-# Browse the full container filesystem as a tree
-uv run dockhand volumes
-uv run dockhand volumes --depth 3
 
 # Download results
 dockhand download results/model.pth
@@ -152,62 +163,29 @@ dockhand resubmit --gpus 2
 
 **Note:** If you've installed dockhand globally, you can omit `uv run`.
 
-## Job Queue
+## Slot Reservations
 
-When multiple people share a Docker host, dockhand can queue jobs through [task spooler](https://viric.name/soft/ts/) (`tsp`) so they run in order rather than competing for resources.
-
-### Setup
-
-Install `tsp` on the Docker host (once):
+When multiple users share a Docker host, jobs may need different amounts of CPU resources. The `--slots` option maps to `tsp -N <n>`, which tells task spooler how many of the host's total slots a job should consume before it is allowed to start.
 
 ```bash
-# Debian/Ubuntu
-sudo apt install task-spooler
+# Lightweight job — uses 1 slot (default)
+dockhand run 'python eval.py'
 
-# macOS
-brew install task-spooler
+# Parallel job — blocks 8 slots while running
+dockhand run --slots 8 'python train.py --workers 8'
 ```
 
-Then enable the queue in `.dockhand.json`:
+The total number of slots available on the host is set with `tsp -S <n>` (run once by the system admin). A job only starts when enough free slots are available, so heavy jobs naturally queue behind each other without manual coordination.
+
+The default slot count can also be set in `.dockhand.json` so it applies to every submission without needing the flag:
 
 ```json
 {
-    "queue": {
-        "enabled": true
+    "docker": {
+        "slots": 4
     }
 }
 ```
-
-### Queue Commands
-
-```bash
-# Submit a job — returns a job ID immediately
-uv run dockhand submit 'python train.py'
-# Job queued with ID 3
-
-# Submit with high priority (moves to front of queue)
-uv run dockhand submit --urgent 'python eval.py'
-
-# List all jobs in the queue
-uv run dockhand jobs
-
-# Promote an already-queued job to the front
-uv run dockhand urgent 3
-
-# Check logs for job 3
-uv run dockhand logs 3
-
-# Stop a running job or cancel a queued one
-uv run dockhand stop 3
-
-# Remove a pending job from the queue
-uv run dockhand remove 3
-
-# Resubmit a previous job with different parameters
-uv run dockhand resubmit 3 --gpus 2
-```
-
-When queue is disabled, all commands fall back to their original behaviour (direct `docker` calls, container IDs).
 
 ## Volumes
 
@@ -215,22 +193,21 @@ The `volumes` command spins up a temporary container (`docker run --rm`) with yo
 
 ```bash
 # Show full container filesystem
-uv run dockhand volumes
+dockhand volumes
 
 # Limit depth
-uv run dockhand volumes --depth 3
+dockhand volumes --depth 3
 
-# Show filesystem for a specific job or container
-uv run dockhand volumes 42           # by job ID (queue mode)
-uv run dockhand volumes abc123def456 # by container ID
+# Show filesystem for a specific job
+dockhand volumes 42
 
 # Same via download --list
-uv run dockhand download --list --depth 2
+dockhand download --list --depth 2
 ```
 
 ## Configuration
 
-Create a `.dockhand.json` file in your project root with Docker and SSH configuration.
+Create a `.dockhand.json` file in your project root.
 
 ### Minimal Configuration
 
@@ -246,7 +223,7 @@ Create a `.dockhand.json` file in your project root with Docker and SSH configur
 
 ### SSH Configuration
 
-To run Docker commands on a remote machine, configure SSH:
+To run Docker commands on a remote machine:
 
 ```json
 {
@@ -261,9 +238,8 @@ To run Docker commands on a remote machine, configure SSH:
 
 Hostname detection:
 
-- If `ssh` config is missing → uses LocalClient
-- If `ssh.hostname` resolves to localhost or `127.0.0.1` → uses LocalClient
-- Otherwise → uses SSHClient
+- No `ssh` config, or hostname resolves to `127.0.0.1` → runs locally
+- Otherwise → connects via SSH
 
 ### Docker Configuration
 
@@ -283,27 +259,29 @@ Hostname detection:
         ],
         "ports": ["8080:80"],
         "gpus": "all",
+        "slots": 1,
         "containerworkdir": "/"
-    },
-    "queue": {
-        "enabled": false
     }
 }
 ```
 
 **Top-level options:**
 
-- **sync**: Whether to rsync local code before building (default: true)
-- **queue.enabled**: Enable task spooler queue integration (default: false)
+| Option | Description | Default |
+|--------|-------------|---------|
+| `sync` | Rsync local code to remote before building | `true` |
 
 **Docker sub-config options:**
 
-- **dockerfile**: Path to the Dockerfile (required)
-- **imagename**: Docker image name (required)
-- **volumes**: List of volume mounts (required but can be empty list)
-- **ports**: Port mappings (optional)
-- **gpus**: GPU configuration passed to `docker run --gpus` (optional)
-- **containerworkdir**: Working directory in container for path resolution (default: /)
+| Option | Description | Default |
+|--------|-------------|---------|
+| `dockerfile` | Path to the Dockerfile | required |
+| `imagename` | Docker image name | required |
+| `volumes` | List of volume mounts | required |
+| `ports` | Port mappings | — |
+| `gpus` | GPU flag passed to `docker run --gpus` | — |
+| `slots` | Queue slots to reserve per job | `1` |
+| `containerworkdir` | Working directory in container for path resolution | `/` |
 
 ### Profiles
 
@@ -319,12 +297,14 @@ Use profiles to switch between different configurations:
         "prod": {
             "docker": {
                 "gpus": "all",
+                "slots": 8,
                 "dockerfile": "Dockerfile.prod"
             }
         },
         "dev": {
             "docker": {
                 "gpus": "1",
+                "slots": 2,
                 "dockerfile": "Dockerfile.dev"
             }
         }
@@ -364,16 +344,15 @@ dockhand --profile prod submit 'python train.py'
         ],
         "ports": ["6006:6006"],
         "gpus": "all",
+        "slots": 4,
         "containerworkdir": "/app"
-    },
-    "queue": {
-        "enabled": true
     },
     "remote_path": "/home/myuser/projects/my-app",
     "profiles": {
         "quick": {
             "docker": {
-                "gpus": "1"
+                "gpus": "1",
+                "slots": 1
             }
         }
     }
@@ -382,12 +361,12 @@ dockhand --profile prod submit 'python train.py'
 
 ## How It Works
 
-1. **Build** (`submit`/`install`): Optionally syncs local code via rsync, then runs `docker build` on the host
-2. **Queue** (`submit`/`run`): Submits a `docker run` command to task spooler (`tsp`), which runs jobs one at a time in order
-3. **Job IDs**: Each submission gets a local job ID (stable, incrementing) alongside the tsp job number — the local ID is what you use in all commands
-4. **Logs** (`logs`): Reads from the tsp output file; use `--follow` to stream a running job live
-5. **Port Forwarding** (`tunnel`): Establishes SSH local port forwards for container ports
-6. **Download**: Maps containerworkdir-relative paths to host paths and uses rsync to fetch files
+1. **Build** (`submit`/`install`): Optionally syncs local code via rsync, then runs `docker build` on the host. Pass `-v` to stream build output; default shows a spinner only.
+2. **Queue** (`submit`/`run`): Submits a `docker run` command to task spooler (`tsp`), which runs jobs one at a time in submission order. Jobs with `--slots N` only start when N free slots are available.
+3. **Job IDs**: Each submission gets a local job ID (stable, auto-incrementing) stored alongside the host and tsp job number. The local ID is what all commands accept.
+4. **Logs** (`logs`): Reads directly from the tsp output file. Use `--follow`/`-f` to stream a running job live, `--n N` for the last N lines.
+5. **Port Forwarding** (`tunnel`): Establishes SSH local port forwards for container ports.
+6. **Download**: Maps containerworkdir-relative paths to host paths and uses rsync to fetch files.
 
 ## License
 
