@@ -12,7 +12,8 @@ class Client(abc.ABC):
         self.close()
 
     @abc.abstractmethod
-    def run(self, command: str, cwd: str | None = None) -> tuple[int, str]:
+    def run(self, command: str, cwd: str | None = None, capture: bool = False) -> tuple[int, str]:
+        """Run a command. When capture=True, suppress live output to the terminal."""
         pass
 
     @abc.abstractmethod

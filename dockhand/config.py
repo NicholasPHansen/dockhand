@@ -19,7 +19,6 @@ class DockerVolumesConfig:
 class DockerResubmitConfig:
     container_id: str | None
     commands: List[str] | None
-    dockerfile: str | None
     imagename: str | None
     gpus: str | None
 
@@ -32,6 +31,7 @@ class DockerConfig:
     ports: list[str]
     gpus: str
     containerworkdir: str
+    slots: int = 1
 
     @classmethod
     def load(cls, config: dict):
@@ -57,6 +57,9 @@ class DockerConfig:
         if "containerworkdir" not in docker:
             docker["containerworkdir"] = "/"
 
+        if "slots" not in docker:
+            docker["slots"] = 1
+
         # Only pass fields that DockerConfig expects
         return cls(
             dockerfile=docker["dockerfile"],
@@ -65,6 +68,7 @@ class DockerConfig:
             ports=docker["ports"],
             gpus=docker["gpus"],
             containerworkdir=docker["containerworkdir"],
+            slots=docker["slots"],
         )
 
     @classmethod
@@ -111,6 +115,15 @@ class DockerConfig:
                     f"Invalid type for gpus option in docker config. Expected string but got {type(gpus).__name__}."
                 )
             output["gpus"] = gpus
+
+        slots = config.get("slots")
+        if slots is not None:
+            if not isinstance(slots, int) or slots < 1:
+                error_and_exit(
+                    f"Invalid value for slots option in docker config. Expected a positive integer but got {slots!r}."
+                )
+            output["slots"] = slots
+
         return output
 
 
