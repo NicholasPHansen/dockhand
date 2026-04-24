@@ -10,12 +10,13 @@ Managing Docker workloads across multiple machines is painful: keeping code in s
 
 `dockhand` solves this by letting you manage everything from your laptop - code syncs automatically, builds happen on the remote, and you track history locally, and after running you can download results back. No more juggling multiple git repos or SSH sessions.
 
-This project is *heavily* inspired by the awesome work from @ChrisFugl's [DTU-HPC-CLI](https://github.com/ChrisFugl/DTU-HPC-CLI). 
+This project is *heavily* inspired by the awesome work from @ChrisFugl's [DTU-HPC-CLI](https://github.com/ChrisFugl/DTU-HPC-CLI).
 
 ## Features
 
 - **Remote Docker Management**: Build and run Docker containers on a remote machine via SSH
 - **Local or Remote**: Automatically detect localhost vs remote, or explicitly configure
+- **Job Queue**: Optional [task spooler](https://viric.name/soft/ts/) integration — submit jobs to a shared queue so they run in order across multiple users
 - **Port Forwarding**: Establish SSH tunnels to access container ports locally
 - **File Syncing**: Automatically sync your local code to the remote before building
 - **Volume Management**: Mount local directories into containers and download files back
@@ -53,15 +54,16 @@ All commands work with the same `.dockhand.json` configuration file format. See 
 
 ### Available Commands
 
-- **submit**: Build the image and run a container with the given command(s)
+- **submit**: Build the image and run a container (or queue it) with the given command(s)
 - **run**: Run a container from an already-built image (skip build step)
 - **install**: Build the Docker image without running it
-- **logs**: Show logs from a container (defaults to last run)
-- **stop**: Stop a running container (defaults to last run)
-- **remove**: Remove container(s) from Docker (defaults to last run)
-- **jobs**: List running containers (`docker ps`)
+- **logs**: Show logs from a container or job (defaults to last)
+- **stop**: Stop a running container or cancel a queued job (defaults to last)
+- **remove**: Remove container(s) or queued job(s) (defaults to last)
+- **jobs**: List running containers or queue contents (when queue is enabled)
+- **urgent**: Promote a queued job to the front of the queue
 - **history**: Show history of all past Docker runs
-- **volumes**: List files in docker-mounted volumes
+- **volumes**: Show the full container filesystem as a tree
 - **download**: Download a file from a docker volume
 - **resubmit**: Resubmit a previous Docker run with optional overrides
 - **tunnel**: Forward container ports to localhost via SSH tunnel
@@ -98,6 +100,10 @@ uv run dockhand remove --from-history
 # See all past runs
 uv run dockhand history
 
+# Browse the full container filesystem as a tree
+uv run dockhand volumes
+uv run dockhand volumes --depth 3
+
 # Download results
 uv run dockhand download results/model.pth
 
@@ -106,6 +112,82 @@ uv run dockhand resubmit --gpus '2'
 ```
 
 **Note:** If you've installed dockhand globally, you can omit `uv run`.
+
+## Job Queue
+
+When multiple people share a Docker host, dockhand can queue jobs through [task spooler](https://viric.name/soft/ts/) (`tsp`) so they run in order rather than competing for resources.
+
+### Setup
+
+Install `tsp` on the Docker host (once):
+
+```bash
+# Debian/Ubuntu
+sudo apt install task-spooler
+
+# macOS
+brew install task-spooler
+```
+
+Then enable the queue in `.dockhand.json`:
+
+```json
+{
+    "queue": {
+        "enabled": true
+    }
+}
+```
+
+### Queue Commands
+
+```bash
+# Submit a job — returns a job ID immediately
+uv run dockhand submit 'python train.py'
+# Job queued with ID 3
+
+# Submit with high priority (moves to front of queue)
+uv run dockhand submit --urgent 'python eval.py'
+
+# List all jobs in the queue
+uv run dockhand jobs
+
+# Promote an already-queued job to the front
+uv run dockhand urgent 3
+
+# Check logs for job 3
+uv run dockhand logs 3
+
+# Stop a running job or cancel a queued one
+uv run dockhand stop 3
+
+# Remove a pending job from the queue
+uv run dockhand remove 3
+
+# Resubmit a previous job with different parameters
+uv run dockhand resubmit 3 --gpus 2
+```
+
+When queue is disabled, all commands fall back to their original behaviour (direct `docker` calls, container IDs).
+
+## Volumes
+
+The `volumes` command spins up a temporary container (`docker run --rm`) with your configured mounts and lists the full filesystem as a tree — including files baked into the image, not just mounted paths.
+
+```bash
+# Show full container filesystem
+uv run dockhand volumes
+
+# Limit depth
+uv run dockhand volumes --depth 3
+
+# Show filesystem for a specific job or container
+uv run dockhand volumes 42           # by job ID (queue mode)
+uv run dockhand volumes abc123def456 # by container ID
+
+# Same via download --list
+uv run dockhand download --list --depth 2
+```
 
 ## Configuration
 
@@ -177,6 +259,9 @@ To run Docker commands on a remote machine, configure SSH:
         "ports": ["8080:80"],
         "gpus": "all",
         "containerworkdir": "/"
+    },
+    "queue": {
+        "enabled": false
     }
 }
 ```
@@ -184,6 +269,7 @@ To run Docker commands on a remote machine, configure SSH:
 **Top-level options:**
 
 - **sync**: Whether to rsync local code before building (default: true)
+- **queue.enabled**: Enable task spooler queue integration (default: false)
 
 **Docker sub-config options:**
 
@@ -255,6 +341,9 @@ uv run dockhand --profile prod submit 'python train.py'
         "gpus": "all",
         "containerworkdir": "/app"
     },
+    "queue": {
+        "enabled": true
+    },
     "remote_path": "/home/myuser/projects/my-app",
     "profiles": {
         "quick": {
@@ -269,11 +358,13 @@ uv run dockhand --profile prod submit 'python train.py'
 ## How It Works
 
 1. **Build** (`submit`/`install`): Optionally syncs local code via rsync, then runs `docker build`
-2. **Run** (`submit`/`run`): Executes `docker run` with volumes, GPU flags, and port mappings
-3. **Port Forwarding** (`tunnel`): Establishes SSH local port forwards for container ports
-4. **History**: Stores container IDs and configurations in `.dockhand_history.json`
-5. **Resubmit**: Looks up a previous run in history and re-runs with optional overrides
-6. **Download**: Maps containerworkdir-relative paths to host paths and uses rsync to download files
+2. **Run** (`submit`/`run`): Executes `docker run` directly, or queues it via `tsp` when queue is enabled
+3. **Queue** (`jobs`/`stop`/`remove`): Interfaces with task spooler to manage pending and running jobs
+4. **Port Forwarding** (`tunnel`): Establishes SSH local port forwards for container ports
+5. **History**: Stores container IDs, job IDs, and configurations in `.dockhand_history.json`
+6. **Resubmit**: Looks up a previous run in history and re-runs with optional overrides
+7. **Volumes**: Spins up a temporary container to show the full filesystem tree
+8. **Download**: Maps containerworkdir-relative paths to host paths and uses rsync to download files
 
 ## Local vs Remote
 
@@ -295,6 +386,7 @@ This allows:
 - git (for repo detection and branch tracking)
 - SSH access to the remote machine (for remote docker host)
 - Docker installed on the remote machine
+- [task spooler](https://viric.name/soft/ts/) (`tsp`) on the Docker host (optional, for queue support)
 
 ## License
 
