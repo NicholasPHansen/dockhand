@@ -68,18 +68,23 @@ def _dict_to_rich_tree(d: dict, tree: Tree) -> None:
         tree.add(name)
 
 
-def execute_volumes(config: DockerConfig, depth: int | None = None) -> None:
+def execute_volumes(
+    config: DockerConfig,
+    depth: int | None = None,
+    imagename: str | None = None,
+    volumes: list | None = None,
+) -> None:
     """Spin up a temporary container and list its full filesystem as a tree."""
+    imagename = imagename or config.imagename
+    volumes = volumes if volumes is not None else (config.volumes or [])
     workdir = config.containerworkdir or "/"
 
-    volumes = []
-    if config.volumes:
-        volumes = [f"-v {v['hostpath']}:{v['containerpath']}:{v['permissions']}" for v in config.volumes]
+    volume_flags = [f"-v {v['hostpath']}:{v['containerpath']}:{v['permissions']}" for v in volumes]
 
     maxdepth = f"-maxdepth {depth} " if depth is not None else ""
     find_cmd = f"find {workdir} {maxdepth}-type f 2>/dev/null"
 
-    docker_cmd = " ".join(["docker", "run", "--rm", *volumes, config.imagename, find_cmd])
+    docker_cmd = " ".join(["docker", "run", "--rm", *volume_flags, imagename, find_cmd])
 
     with get_client() as client:
         exit_code, stdout = client.run(docker_cmd, cwd=cli_config.remote_path)

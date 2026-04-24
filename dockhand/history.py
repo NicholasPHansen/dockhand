@@ -67,6 +67,25 @@ def get_history_entry_by_job_id(ts_job_id: int) -> dict | None:
     return None
 
 
+def get_history_entry(id: str) -> dict | None:
+    """Look up a history entry by job ID (numeric) or container ID (hex string).
+
+    Tries ts_job_id first if the id is a pure integer, otherwise matches
+    against container_id (prefix match for short IDs).
+    """
+    history = load_history()
+    if id.isdigit():
+        job_id = int(id)
+        for entry in reversed(history):
+            if entry.get("ts_job_id") == job_id:
+                return entry
+    for entry in reversed(history):
+        container_id = entry.get("container_id") or ""
+        if container_id and container_id.startswith(id):
+            return entry
+    return None
+
+
 def execute_history(config: DockerConfig):
     """Show history of past Docker runs."""
     if not DOCKER_HISTORY_FILE.exists():

@@ -199,14 +199,19 @@ def history():
 
 @cli.command()
 def volumes(
+    id: Annotated[
+        str | None,
+        typer.Argument(help="Job ID or container ID to use mounts from. Defaults to config."),
+    ] = None,
     depth: Annotated[
         int | None,
         typer.Option("--depth", help="Maximum directory depth to display."),
     ] = None,
 ):
-    """List files in docker-mounted volumes as a tree."""
+    """List the full container filesystem as a tree."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_volumes(cli_config.docker, depth=depth)
+    imagename, override_volumes = _resolve_volumes_overrides(id)
+    execute_volumes(cli_config.docker, depth=depth, imagename=imagename, volumes=override_volumes)
 
 
 @cli.command()
@@ -227,13 +232,18 @@ def download(
         int | None,
         typer.Option("--depth", help="Maximum directory depth to display (only applies with --list)."),
     ] = None,
+    id: Annotated[
+        str | None,
+        typer.Option("--id", help="Job ID or container ID to use mounts from (only applies with --list)."),
+    ] = None,
 ):
     """Download a file from a docker volume by its workdir-relative path.
 
     Files are downloaded preserving their directory structure relative to project root."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     if list_only:
-        execute_volumes(cli_config.docker, depth=depth)
+        imagename, override_volumes = _resolve_volumes_overrides(id)
+        execute_volumes(cli_config.docker, depth=depth, imagename=imagename, volumes=override_volumes)
         return
     if path is None:
         typer.echo("Error: Missing argument 'PATH'. Use --list to see available files.")
@@ -291,6 +301,24 @@ def tunnel(
     Defaults to ports from the last (or specified) run. Use -p to override."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     execute_tunnel(container_id=container_id, ports=ports or None)
+
+
+def _resolve_volumes_overrides(id: str | None) -> tuple[str | None, list | None]:
+    """Look up imagename and volumes from history for a given job/container ID.
+
+    Returns (None, None) when no ID is provided, leaving execute_volumes to
+    fall back to the current config.
+    """
+    if id is None:
+        return None, None
+    from dockhand.history import get_history_entry
+
+    entry = get_history_entry(id)
+    if entry is None:
+        typer.echo(f"Warning: ID '{id}' not found in history — using config defaults.")
+        return None, None
+    cfg = entry["config"]
+    return cfg.get("imagename"), cfg.get("volumes")
 
 
 if __name__ == "__main__":
