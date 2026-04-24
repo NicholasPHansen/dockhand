@@ -138,10 +138,12 @@ def stop(
 
 
 @cli.command()
-def jobs():
-    """List all jobs in the queue."""
+def jobs(
+    all: Annotated[bool, typer.Option("--all", help="Include finished and failed jobs.")] = False,
+):
+    """List running and queued jobs (defaults to active only)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    execute_stats(cli_config.docker)
+    execute_stats(cli_config.docker, all=all)
 
 
 @cli.command()

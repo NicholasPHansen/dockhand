@@ -31,13 +31,16 @@ def _user_command(full_cmd: str, imagename: str) -> str:
     return full_cmd
 
 
-def execute_stats(config: DockerConfig):
-    """List all jobs in the task spooler queue."""
+def execute_stats(config: DockerConfig, all: bool = False):
+    """List jobs in the task spooler queue."""
     with get_client() as client:
         jobs = ts_list(client, cwd=cli_config.remote_path)
 
+    if not all:
+        jobs = [j for j in jobs if j["state"] in ("running", "queued")]
+
     if not jobs:
-        typer.echo("No jobs in queue.")
+        typer.echo("No active jobs." if not all else "No jobs in queue.")
         return
 
     history = load_history()
