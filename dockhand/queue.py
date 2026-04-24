@@ -1,4 +1,5 @@
 """Task spooler (ts) queue integration."""
+
 import re
 
 from dockhand.client.base import Client
@@ -46,11 +47,25 @@ def ts_kill(client: Client, job_id: int, cwd: str) -> bool:
     return returncode == 0
 
 
-
 def ts_get_job(client: Client, job_id: int, cwd: str) -> dict | None:
     """Look up a single job by ID from ts -l. Returns None if not found."""
     jobs = ts_list(client, cwd=cwd)
     return next((j for j in jobs if j["id"] == job_id), None)
+
+
+def extract_docker_command(input_string):
+    # Regex breakdown:
+    # -v\s+\S+:\S+:\w+  -> Matches the -v flag and the path mapping
+    # .* -> Greedily matches as much as possible to find the LAST -v
+    # \s+\S+            -> Matches the image name
+    # \s+(.*)           -> Captures everything after that image name
+    pattern = r".*-v\s+\S+:\S+:\w+\s+\S+\s+(.*)"
+    match = re.search(pattern, input_string)
+
+    if match:
+        return match.group(1).strip()
+    else:
+        return None
 
 
 def _parse_ts_list(output: str) -> list[dict]:
@@ -73,6 +88,7 @@ def _parse_ts_list(output: str) -> list[dict]:
             continue
         # Split into at most 6 parts; the last part is the full command string
         parts = re.split(r"\s+", line, maxsplit=5)
+        command = extract_docker_command(line)
         if len(parts) < 2:
             continue
         try:
@@ -85,7 +101,7 @@ def _parse_ts_list(output: str) -> list[dict]:
                 "state": parts[1],  # queued / running / finished / failed / skipped
                 "output_file": parts[2] if len(parts) > 2 else None,
                 "exit_code": parts[3] if len(parts) > 3 else None,
-                "command": parts[5] if len(parts) > 5 else "",
+                "command": command if command else "",
             }
         )
 
