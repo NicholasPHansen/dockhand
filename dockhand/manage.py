@@ -38,7 +38,7 @@ def execute_stats(config: DockerConfig, all: bool = False):
         jobs = ts_list(client, cwd=cli_config.remote_path)
 
     if not all:
-        jobs = [j for j in jobs if j["state"] in ("running", "queued")]
+        jobs = [j for j in jobs if j["state"] in ("running", "queued", "finished")]
 
     if not jobs:
         typer.echo("No active jobs." if not all else "No jobs in queue.")
