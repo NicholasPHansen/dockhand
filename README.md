@@ -286,7 +286,8 @@ Hostname detection:
         "ports": ["8080:80"],
         "gpus": "all",
         "slots": 1,
-        "containerworkdir": "/"
+        "containerworkdir": "/",
+        "preserve_paths": [".venv"]
     }
 }
 ```
@@ -308,6 +309,7 @@ Hostname detection:
 | `gpus` | GPU flag passed to `docker run --gpus` | — |
 | `slots` | Queue slots to reserve per job | `1` |
 | `containerworkdir` | Path inside the container where the project is mounted and commands run from | `/` |
+| `preserve_paths` | Subpaths under `containerworkdir` to keep from the image instead of the bind-mounted host copy (e.g. `.venv`, `node_modules`) | `[]` |
 
 ### Profiles
 
@@ -388,7 +390,7 @@ dockhand --profile prod submit 'python train.py'
 ## How It Works
 
 1. **Build** (`install`): Optionally syncs local code via rsync, then runs `docker build` on the host. Pass `-v` to stream build output; default shows a spinner only. Only needed when dependencies or the Dockerfile change.
-2. **Submit** (`submit`/`run`): Optionally syncs code to the remote, then submits a `docker run` command to task spooler (`tsp`). The project directory is automatically mounted into the container at `containerworkdir`, so the running container always uses your latest code without a rebuild.
+2. **Submit** (`submit`/`run`): Optionally syncs code to the remote, then submits a `docker run` command to task spooler (`tsp`). The project directory is automatically mounted into the container at `containerworkdir`, so the running container always uses your latest code without a rebuild. Because this bind-mount overlays `containerworkdir`, any artifacts the image built *inside* that path (a `.venv`, `node_modules`, etc.) are shadowed by the host copy; list them under `preserve_paths` to keep the image's version via an anonymous volume.
 3. **Queue**: tsp runs jobs one at a time in submission order. Jobs with `--slots N` only start when N free slots are available.
 4. **Job IDs**: Each submission gets a local job ID (stable, auto-incrementing) stored alongside the host and tsp job number. The local ID is what all commands accept.
 5. **Logs** (`logs`): Reads directly from the tsp output file. Use `--follow`/`-f` to stream a running job live, `--n N` for the last N lines.
