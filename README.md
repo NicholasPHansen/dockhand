@@ -197,7 +197,7 @@ The default slot count can also be set in `.dockhand.json` so it applies to ever
 
 ```json
 {
-    "docker": {
+    "queue": {
         "slots": 4
     }
 }
@@ -273,6 +273,10 @@ Hostname detection:
 {
     "sync": true,
     "ssh": { "..." },
+    "queue": {
+        "enabled": true,
+        "slots": 1
+    },
     "docker": {
         "dockerfile": "Dockerfile",
         "imagename": "my-image",
@@ -285,7 +289,6 @@ Hostname detection:
         ],
         "ports": ["8080:80"],
         "gpus": "all",
-        "slots": 1,
         "containerworkdir": "/",
         "preserve_paths": [".venv"]
     }
@@ -298,6 +301,14 @@ Hostname detection:
 |--------|-------------|---------|
 | `sync` | Rsync local code to remote before building | `true` |
 
+**Queue sub-config options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `enabled` | Submit jobs through the task-spooler queue | `false` |
+| `tool` | Queue backend | `task_spooler` |
+| `slots` | Default queue slots to reserve per job (overridden by `--slots`) | `1` |
+
 **Docker sub-config options:**
 
 | Option | Description | Default |
@@ -307,9 +318,10 @@ Hostname detection:
 | `volumes` | List of volume mounts | required |
 | `ports` | Port mappings | — |
 | `gpus` | GPU flag passed to `docker run --gpus` | — |
-| `slots` | Queue slots to reserve per job | `1` |
 | `containerworkdir` | Path inside the container where the project is mounted and commands run from | `/` |
 | `preserve_paths` | Subpaths under `containerworkdir` to keep from the image instead of the bind-mounted host copy (e.g. `.venv`, `node_modules`) | `[]` |
+
+> **Note:** `slots` moved from the `docker` block to the `queue` block. A `docker.slots` value is still honored with a deprecation warning.
 
 ### Profiles
 
@@ -323,16 +335,16 @@ Use profiles to switch between different configurations:
     },
     "profiles": {
         "prod": {
+            "queue": { "slots": 8 },
             "docker": {
                 "gpus": "all",
-                "slots": 8,
                 "dockerfile": "Dockerfile.prod"
             }
         },
         "dev": {
+            "queue": { "slots": 2 },
             "docker": {
                 "gpus": "1",
-                "slots": 2,
                 "dockerfile": "Dockerfile.dev"
             }
         }
@@ -372,15 +384,18 @@ dockhand --profile prod submit 'python train.py'
         ],
         "ports": ["6006:6006"],
         "gpus": "all",
-        "slots": 4,
         "containerworkdir": "/app"
+    },
+    "queue": {
+        "enabled": true,
+        "slots": 4
     },
     "remote_path": "/home/myuser/projects/my-app",
     "profiles": {
         "quick": {
+            "queue": { "slots": 1 },
             "docker": {
-                "gpus": "1",
-                "slots": 1
+                "gpus": "1"
             }
         }
     }

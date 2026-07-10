@@ -84,7 +84,7 @@ def execute_submit(
     imagename = imagename or config.imagename
     gpus = gpus if gpus is not None else config.gpus
     effective_ports = ports if ports is not None else config.ports
-    effective_slots = slots if slots is not None else config.slots
+    effective_slots = slots if slots is not None else cli_config.queue.slots
 
     docker_cmd = _build_docker_run_cmd(config, commands, imagename, gpus, effective_ports)
 

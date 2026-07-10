@@ -4,6 +4,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import List
 
+import typer
+
 from dockhand.constants import CONFIG_FILENAME, HISTORY_FILENAME
 from dockhand.error import error_and_exit
 
@@ -31,7 +33,6 @@ class DockerConfig:
     ports: list[str]
     gpus: str
     containerworkdir: str
-    slots: int = 1
     preserve_paths: list[str] = dataclasses.field(default_factory=list)
 
     @classmethod
@@ -58,9 +59,6 @@ class DockerConfig:
         if "containerworkdir" not in docker:
             docker["containerworkdir"] = "/"
 
-        if "slots" not in docker:
-            docker["slots"] = 1
-
         if "preserve_paths" not in docker:
             docker["preserve_paths"] = []
 
@@ -72,7 +70,6 @@ class DockerConfig:
             ports=docker["ports"],
             gpus=docker["gpus"],
             containerworkdir=docker["containerworkdir"],
-            slots=docker["slots"],
             preserve_paths=docker["preserve_paths"],
         )
 
@@ -121,14 +118,6 @@ class DockerConfig:
                 )
             output["gpus"] = gpus
 
-        slots = config.get("slots")
-        if slots is not None:
-            if not isinstance(slots, int) or slots < 1:
-                error_and_exit(
-                    f"Invalid value for slots option in docker config. Expected a positive integer but got {slots!r}."
-                )
-            output["slots"] = slots
-
         preserve_paths = config.get("preserve_paths")
         if preserve_paths is not None:
             if not isinstance(preserve_paths, list) or not all(isinstance(p, str) for p in preserve_paths):
@@ -145,17 +134,35 @@ class DockerConfig:
 class QueueConfig:
     enabled: bool = False
     tool: str = "task_spooler"
+    slots: int = 1
 
     @classmethod
     def load(cls, config: dict):
-        if "queue" not in config:
-            return cls()
-        queue = config["queue"]
+        queue = config.get("queue", {})
         if not isinstance(queue, dict):
             error_and_exit(f"Invalid type for queue option in config. Expected dictionary but got {type(queue)}.")
         enabled = queue.get("enabled", False)
         tool = queue.get("tool", "task_spooler")
-        return cls(enabled=enabled, tool=tool)
+        slots = cls._load_slots(queue, config.get("docker") or {})
+        return cls(enabled=enabled, tool=tool, slots=slots)
+
+    @staticmethod
+    def _load_slots(queue: dict, docker: dict) -> int:
+        slots = queue.get("slots")
+        if slots is None and isinstance(docker, dict) and "slots" in docker:
+            # Back-compat: slots used to live under the docker block.
+            typer.echo(
+                "Warning: 'docker.slots' is deprecated — move it to 'queue.slots'.",
+                err=True,
+            )
+            slots = docker["slots"]
+        if slots is None:
+            return 1
+        if not isinstance(slots, int) or isinstance(slots, bool) or slots < 1:
+            error_and_exit(
+                f"Invalid value for slots option in queue config. Expected a positive integer but got {slots!r}."
+            )
+        return slots
 
 
 @dataclasses.dataclass
