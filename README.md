@@ -179,6 +179,10 @@ dockhand resubmit --gpus 2
 
 **Note:** If you've installed dockhand globally, you can omit `uv run`.
 
+Resubmitting a job that ran in [`bake`](#code-delivery-mount-vs-bake) mode reruns the exact
+image it originally built — recorded per job — rather than rebuilding from current code, so a
+past run reproduces faithfully. (Overriding `--imagename` opts out and uses the new image.)
+
 ## Slot Reservations
 
 When multiple users share a Docker host, jobs may need different amounts of CPU resources. The `--slots` option maps to `tsp -N <n>`, which tells task spooler how many of the host's total slots a job should consume before it is allowed to start.

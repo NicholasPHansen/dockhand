@@ -53,6 +53,7 @@ def add_to_history(
     *,
     local_id: int,
     handle: dict,
+    image_ref: str | None = None,
     branch: str | None = None,
     ports: list[str] | None = None,
     host: str | None = None,
@@ -60,7 +61,9 @@ def add_to_history(
     """Add a started job to the history file. Returns the local job ID.
 
     ``handle`` carries the transport-specific job handle (e.g. ``transport`` name and
-    a ``ts_job_id`` or container ``handle``) and is merged into the entry.
+    a ``ts_job_id`` or container ``handle``) and is merged into the entry. ``image_ref``
+    is the exact image that ran (a resolved baked tag, or the base image name for mount
+    delivery) so the job can be reproduced verbatim on resubmit.
     """
     history = load_history()
     _d = {
@@ -70,6 +73,8 @@ def add_to_history(
         "commands": commands,
         "ports": ports,
     }
+    if image_ref is not None:
+        _d["image_ref"] = image_ref
     if branch is not None:
         _d["branch"] = branch
     entry = {

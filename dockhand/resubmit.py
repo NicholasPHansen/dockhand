@@ -1,6 +1,8 @@
 """Docker container resubmission."""
 import dataclasses
 
+import typer
+
 from dockhand.config import DockerConfig, DockerResubmitConfig
 from dockhand.error import error_and_exit
 
@@ -31,4 +33,17 @@ def execute_resubmit(docker_config: DockerConfig, resubmit_config: DockerResubmi
 
     updated_config = dataclasses.replace(docker_config, imagename=imagename, gpus=gpus)
 
-    execute_submit(updated_config, commands, sync=False, imagename=imagename, gpus=gpus)
+    # Reproduce a baked job verbatim: rerun the exact image it originally built instead of
+    # re-resolving/rebuilding from the current code. Only when the original ran a distinct
+    # baked tag and the image name wasn't overridden.
+    original_image_ref = original_config.get("image_ref")
+    original_imagename = original_config.get("imagename")
+    pin_image = (
+        original_image_ref
+        if (resubmit_config.imagename is None and original_image_ref and original_image_ref != original_imagename)
+        else None
+    )
+    if pin_image is not None:
+        typer.echo(f"Reusing baked image {pin_image} from the original run.")
+
+    execute_submit(updated_config, commands, sync=False, imagename=imagename, gpus=gpus, image_ref=pin_image)
