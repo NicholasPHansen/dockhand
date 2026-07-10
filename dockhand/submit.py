@@ -87,11 +87,13 @@ def execute_submit(
     ports: list[str] | None = None,
     urgent: bool = False,
     slots: int | None = None,
+    image_ref: str | None = None,
 ) -> int:
     """Optionally sync code, then start a container run. Returns the local job ID.
 
     Runs through the queue (task spooler) when ``queue.enabled``, otherwise starts a
-    detached container directly.
+    detached container directly. When ``image_ref`` is given (e.g. resubmitting a baked
+    job), that exact pre-built image is run verbatim — no re-resolution and no rebuild.
     """
     from dockhand.build import execute_build
     from dockhand.history import reserve_local_id
@@ -109,17 +111,21 @@ def execute_submit(
     transport = get_transport()
     local_id = reserve_local_id()
 
-    delivery = config.resolve_code_delivery(cli_config.queue.enabled)
-    if delivery == "bake":
-        # Bake the code into an image and run that; no code mount at run time. Queued
-        # jobs get an immutable per-submit tag so they stay pinned to their code.
-        image_ref = resolve_image_ref(imagename, unique=cli_config.queue.enabled)
-        execute_build(config, sync=False, dockerfile=config.dockerfile, imagename=image_ref)
+    if image_ref is not None:
+        # Rerun an exact pre-built image (baked); no re-resolution, no rebuild.
         run_image = image_ref
         mount_code = False
     else:
-        run_image = imagename
-        mount_code = True
+        delivery = config.resolve_code_delivery(cli_config.queue.enabled)
+        if delivery == "bake":
+            # Bake the code into an image and run that; no code mount at run time. Queued
+            # jobs get an immutable per-submit tag so they stay pinned to their code.
+            run_image = resolve_image_ref(imagename, unique=cli_config.queue.enabled)
+            execute_build(config, sync=False, dockerfile=config.dockerfile, imagename=run_image)
+            mount_code = False
+        else:
+            run_image = imagename
+            mount_code = True
 
     docker_cmd = _build_docker_run_cmd(
         config,
@@ -145,6 +151,7 @@ def execute_submit(
         commands=commands,
         local_id=local_id,
         handle=handle,
+        image_ref=run_image,
         branch=_get_branch(),
         ports=effective_ports,
         host=host,
