@@ -18,6 +18,7 @@ def _build_docker_run_cmd(
     gpus: str | None,
     effective_ports: list[str] | None,
     mount_code: bool = True,
+    run_flags: list[str] | None = None,
 ) -> str:
     """Build the docker run command string.
 
@@ -50,11 +51,15 @@ def _build_docker_run_cmd(
     gpu_flags = [f"--gpus {gpus}"] if gpus is not None else []
     port_flags = [f"-p {mapping}" for mapping in effective_ports] if effective_ports is not None else []
 
+    # Run flags come from the transport (e.g. ["--rm"] for the queue, or
+    # ["-d", "--name", ...] for a detached direct run).
+    run_flags = ["--rm"] if run_flags is None else run_flags
+
     return " ".join(
         [
             "docker",
             "run",
-            "--rm",
+            *run_flags,
             *code_mounts,
             *data_volumes,
             *gpu_flags,
@@ -83,10 +88,15 @@ def execute_submit(
     urgent: bool = False,
     slots: int | None = None,
 ) -> int:
-    """Optionally sync code, then queue a container run. Returns the local job ID."""
+    """Optionally sync code, then start a container run. Returns the local job ID.
+
+    Runs through the queue (task spooler) when ``queue.enabled``, otherwise starts a
+    detached container directly.
+    """
     from dockhand.build import execute_build
-    from dockhand.queue import ts_make_urgent, ts_submit
+    from dockhand.history import reserve_local_id
     from dockhand.tagging import resolve_image_ref
+    from dockhand.transport import get_transport
 
     if sync:
         execute_sync(confirm_changes=True)
@@ -96,36 +106,51 @@ def execute_submit(
     effective_ports = ports if ports is not None else config.ports
     effective_slots = slots if slots is not None else cli_config.queue.slots
 
+    transport = get_transport()
+    local_id = reserve_local_id()
+
     delivery = config.resolve_code_delivery(cli_config.queue.enabled)
     if delivery == "bake":
         # Bake the code into an image and run that; no code mount at run time. Queued
         # jobs get an immutable per-submit tag so they stay pinned to their code.
         image_ref = resolve_image_ref(imagename, unique=cli_config.queue.enabled)
         execute_build(config, sync=False, dockerfile=config.dockerfile, imagename=image_ref)
-        docker_cmd = _build_docker_run_cmd(
-            config, commands, image_ref, gpus, effective_ports, mount_code=False
-        )
+        run_image = image_ref
+        mount_code = False
     else:
-        docker_cmd = _build_docker_run_cmd(config, commands, imagename, gpus, effective_ports, mount_code=True)
+        run_image = imagename
+        mount_code = True
+
+    docker_cmd = _build_docker_run_cmd(
+        config,
+        commands,
+        run_image,
+        gpus,
+        effective_ports,
+        mount_code=mount_code,
+        run_flags=transport.run_flags(local_id),
+    )
 
     with get_client() as client:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
-            task = progress.add_task(description="Queuing job", total=None)
-            ts_job_id = ts_submit(client, docker_cmd, cwd=cli_config.remote_path, slots=effective_slots)
-            if urgent:
-                ts_make_urgent(client, ts_job_id, cwd=cli_config.remote_path)
+            task = progress.add_task(description="Submitting job", total=None)
+            handle = transport.submit(
+                client, docker_cmd, local_id=local_id, slots=effective_slots, urgent=urgent
+            )
             progress.update(task, completed=True)
 
     host = cli_config.ssh.hostname if cli_config.ssh else "localhost"
-    local_id = add_to_history(
+    add_to_history(
         config,
         commands=commands,
-        ts_job_id=ts_job_id,
+        local_id=local_id,
+        handle=handle,
         branch=_get_branch(),
         ports=effective_ports,
         host=host,
     )
 
-    label = "urgent job" if urgent else "job"
-    typer.echo(f"Queued {label} #{local_id}")
+    verb = "Queued" if cli_config.queue.enabled else "Started"
+    label = "urgent job" if (urgent and cli_config.queue.enabled) else "job"
+    typer.echo(f"{verb} {label} #{local_id}")
     return local_id

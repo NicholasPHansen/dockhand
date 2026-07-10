@@ -309,6 +309,12 @@ Hostname detection:
 | `tool` | Queue backend | `task_spooler` |
 | `slots` | Default queue slots to reserve per job (overridden by `--slots`) | `1` |
 
+When `enabled` is **true**, jobs are queued with `tsp` and run in submission order. When
+**false**, there is no queue — each submit starts immediately as a detached container
+(`docker run -d --name dockhand-<id>`). `logs`, `stop`, `jobs`, and `remove` work the same
+in both modes; they transparently use `tsp` or `docker` per the job's recorded transport.
+`--slots` and `--urgent` are queue-only and are ignored (with a warning) when the queue is off.
+
 **Docker sub-config options:**
 
 | Option | Description | Default |
@@ -428,10 +434,10 @@ dockhand --profile prod submit 'python train.py'
 ## How It Works
 
 1. **Build** (`install`): Optionally syncs local code via rsync, then runs `docker build` on the host. Pass `-v` to stream build output; default shows a spinner only. Only needed when dependencies or the Dockerfile change.
-2. **Submit** (`submit`/`run`): Optionally syncs code to the remote, then submits a `docker run` command to task spooler (`tsp`). How code reaches the container depends on [`code_delivery`](#code-delivery-mount-vs-bake): in `mount` mode the project directory is bind-mounted at `containerworkdir` (no rebuild; `preserve_paths` protects image-built artifacts like a `.venv` from being shadowed by the mount); in `bake` mode the code is built into an image — content-addressed and immutable for queued jobs — and run with no code mount.
-3. **Queue**: tsp runs jobs one at a time in submission order. Jobs with `--slots N` only start when N free slots are available.
-4. **Job IDs**: Each submission gets a local job ID (stable, auto-incrementing) stored alongside the host and tsp job number. The local ID is what all commands accept.
-5. **Logs** (`logs`): Reads directly from the tsp output file. Use `--follow`/`-f` to stream a running job live, `--n N` for the last N lines.
+2. **Submit** (`submit`/`run`): Optionally syncs code to the remote, then starts a `docker run`. With the queue enabled it's submitted to task spooler (`tsp`); with the queue disabled it runs immediately as a detached container. How code reaches the container depends on [`code_delivery`](#code-delivery-mount-vs-bake): in `mount` mode the project directory is bind-mounted at `containerworkdir` (no rebuild; `preserve_paths` protects image-built artifacts like a `.venv` from being shadowed by the mount); in `bake` mode the code is built into an image — content-addressed and immutable for queued jobs — and run with no code mount.
+3. **Queue** (when enabled): tsp runs jobs one at a time in submission order. Jobs with `--slots N` only start when N free slots are available. With the queue disabled, jobs start on submit and this ordering doesn't apply.
+4. **Job IDs**: Each submission gets a local job ID (stable, auto-incrementing) stored alongside the host and the transport handle (tsp job number, or container name). The local ID is what all commands accept.
+5. **Logs** (`logs`): Reads from the tsp output file (queued jobs) or via `docker logs` (direct runs). Use `--follow`/`-f` to stream a running job live, `--n N` for the last N lines.
 6. **Port Forwarding** (`tunnel`): Establishes SSH local port forwards for container ports.
 7. **Download**: Maps containerworkdir-relative paths to host paths and uses rsync to fetch files.
 

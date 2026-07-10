@@ -38,17 +38,31 @@ def _next_local_id(history: list[dict]) -> int:
     return max((e.get("local_id", 0) for e in history), default=0) + 1
 
 
+def reserve_local_id() -> int:
+    """Peek the next local job ID without persisting it.
+
+    Submitting needs the ID before the job runs (e.g. to name the container), so it
+    is reserved here and passed to :func:`add_to_history` once the job has started.
+    """
+    return _next_local_id(load_history())
+
+
 def add_to_history(
     config: DockerConfig,
     commands: List[str],
-    ts_job_id: int,
+    *,
+    local_id: int,
+    handle: dict,
     branch: str | None = None,
     ports: list[str] | None = None,
     host: str | None = None,
 ) -> int:
-    """Add a queued job to the history file. Returns the local job ID."""
+    """Add a started job to the history file. Returns the local job ID.
+
+    ``handle`` carries the transport-specific job handle (e.g. ``transport`` name and
+    a ``ts_job_id`` or container ``handle``) and is merged into the entry.
+    """
     history = load_history()
-    local_id = _next_local_id(history)
     _d = {
         "gpus": config.gpus,
         "volumes": config.volumes,
@@ -60,9 +74,9 @@ def add_to_history(
         _d["branch"] = branch
     entry = {
         "local_id": local_id,
-        "ts_job_id": ts_job_id,
         "timestamp": time.time(),
         "config": _d,
+        **handle,
     }
     if host is not None:
         entry["host"] = host
