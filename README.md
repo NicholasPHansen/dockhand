@@ -319,9 +319,32 @@ Hostname detection:
 | `ports` | Port mappings | — |
 | `gpus` | GPU flag passed to `docker run --gpus` | — |
 | `containerworkdir` | Path inside the container where the project is mounted and commands run from | `/` |
-| `preserve_paths` | Subpaths under `containerworkdir` to keep from the image instead of the bind-mounted host copy (e.g. `.venv`, `node_modules`) | `[]` |
+| `preserve_paths` | Subpaths under `containerworkdir` to keep from the image instead of the bind-mounted host copy (e.g. `.venv`, `node_modules`) — only used in `mount` delivery | `[]` |
+| `code_delivery` | How code reaches the container: `mount` or `bake` | derived from `queue.enabled` |
 
 > **Note:** `slots` moved from the `docker` block to the `queue` block. A `docker.slots` value is still honored with a deprecation warning.
+
+### Code delivery: `mount` vs `bake`
+
+`code_delivery` controls how your code gets into the container:
+
+- **`mount`** — bind-mount the synced project over `containerworkdir` at run time (with
+  `preserve_paths` protecting image-built artifacts). No rebuild per submit, so it's ideal
+  for tight edit-run iteration. The code is read when the container *starts*.
+- **`bake`** — build the code into the image and run that image with no code mount. Each
+  submit builds (Docker layer caching keeps this cheap when only source changed).
+
+When unset it defaults by mode: **`bake` when `queue.enabled` is true, `mount` otherwise.**
+The reason is drift. A queued job may sit in the queue before it runs; with `mount` it would
+pick up whatever code is on disk when it *dequeues*, so editing code after submitting silently
+changes an already-queued job. `bake` pins each queued submit to an immutable, content-addressed
+image tag (derived from the git commit, plus a hash of uncommitted changes) so the job runs
+exactly the code it was submitted with. Without a queue there's no drift window, so `mount`'s
+zero-rebuild iteration wins. Set `code_delivery` explicitly to override the default either way.
+
+> Data `volumes` are always mounted regardless of `code_delivery`; only the *code* mount differs.
+> For guaranteed-immutable queued builds, commit before submitting — untracked file *contents*
+> are not folded into the image tag.
 
 ### Profiles
 
@@ -405,7 +428,7 @@ dockhand --profile prod submit 'python train.py'
 ## How It Works
 
 1. **Build** (`install`): Optionally syncs local code via rsync, then runs `docker build` on the host. Pass `-v` to stream build output; default shows a spinner only. Only needed when dependencies or the Dockerfile change.
-2. **Submit** (`submit`/`run`): Optionally syncs code to the remote, then submits a `docker run` command to task spooler (`tsp`). The project directory is automatically mounted into the container at `containerworkdir`, so the running container always uses your latest code without a rebuild. Because this bind-mount overlays `containerworkdir`, any artifacts the image built *inside* that path (a `.venv`, `node_modules`, etc.) are shadowed by the host copy; list them under `preserve_paths` to keep the image's version via an anonymous volume.
+2. **Submit** (`submit`/`run`): Optionally syncs code to the remote, then submits a `docker run` command to task spooler (`tsp`). How code reaches the container depends on [`code_delivery`](#code-delivery-mount-vs-bake): in `mount` mode the project directory is bind-mounted at `containerworkdir` (no rebuild; `preserve_paths` protects image-built artifacts like a `.venv` from being shadowed by the mount); in `bake` mode the code is built into an image — content-addressed and immutable for queued jobs — and run with no code mount.
 3. **Queue**: tsp runs jobs one at a time in submission order. Jobs with `--slots N` only start when N free slots are available.
 4. **Job IDs**: Each submission gets a local job ID (stable, auto-incrementing) stored alongside the host and tsp job number. The local ID is what all commands accept.
 5. **Logs** (`logs`): Reads directly from the tsp output file. Use `--follow`/`-f` to stream a running job live, `--n N` for the last N lines.

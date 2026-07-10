@@ -17,22 +17,31 @@ def _build_docker_run_cmd(
     imagename: str,
     gpus: str | None,
     effective_ports: list[str] | None,
+    mount_code: bool = True,
 ) -> str:
-    """Build the docker run command string."""
-    if config.containerworkdir == "/":
-        typer.echo(
-            "Warning: containerworkdir is '/' — mounting code at the container root will shadow the entire filesystem.",
-            err=True,
-        )
+    """Build the docker run command string.
 
-    # Implicit code mount: remote project path → containerworkdir
-    code_mount = f"-v {cli_config.remote_path}:{config.containerworkdir}:rw"
+    When ``mount_code`` is True (mount delivery) the project directory is bind-mounted
+    over ``containerworkdir`` and ``preserve_paths`` anonymous volumes are layered on
+    top. When False (bake delivery) the code is already baked into ``imagename``, so no
+    code mount or preserve volumes are emitted — only data volumes.
+    """
+    code_mounts = []
+    if mount_code:
+        if config.containerworkdir == "/":
+            typer.echo(
+                "Warning: containerworkdir is '/' — mounting code at the container root "
+                "will shadow the entire filesystem.",
+                err=True,
+            )
+        # Implicit code mount: remote project path → containerworkdir
+        code_mounts.append(f"-v {cli_config.remote_path}:{config.containerworkdir}:rw")
 
-    # Anonymous volumes layered on top of the code mount for paths that must keep the
-    # image's build-time contents (e.g. a virtualenv or node_modules baked in at build
-    # time) instead of being shadowed by the bind-mounted host project directory.
-    workdir = config.containerworkdir.rstrip("/")
-    preserve_mounts = [f"-v {workdir}/{path.strip('/')}" for path in config.preserve_paths]
+        # Anonymous volumes layered on top of the code mount for paths that must keep the
+        # image's build-time contents (e.g. a virtualenv or node_modules baked in at build
+        # time) instead of being shadowed by the bind-mounted host project directory.
+        workdir = config.containerworkdir.rstrip("/")
+        code_mounts += [f"-v {workdir}/{path.strip('/')}" for path in config.preserve_paths]
 
     data_volumes = []
     if config.volumes is not None:
@@ -46,8 +55,7 @@ def _build_docker_run_cmd(
             "docker",
             "run",
             "--rm",
-            code_mount,
-            *preserve_mounts,
+            *code_mounts,
             *data_volumes,
             *gpu_flags,
             *port_flags,
@@ -76,7 +84,9 @@ def execute_submit(
     slots: int | None = None,
 ) -> int:
     """Optionally sync code, then queue a container run. Returns the local job ID."""
+    from dockhand.build import execute_build
     from dockhand.queue import ts_make_urgent, ts_submit
+    from dockhand.tagging import resolve_image_ref
 
     if sync:
         execute_sync(confirm_changes=True)
@@ -86,7 +96,17 @@ def execute_submit(
     effective_ports = ports if ports is not None else config.ports
     effective_slots = slots if slots is not None else cli_config.queue.slots
 
-    docker_cmd = _build_docker_run_cmd(config, commands, imagename, gpus, effective_ports)
+    delivery = config.resolve_code_delivery(cli_config.queue.enabled)
+    if delivery == "bake":
+        # Bake the code into an image and run that; no code mount at run time. Queued
+        # jobs get an immutable per-submit tag so they stay pinned to their code.
+        image_ref = resolve_image_ref(imagename, unique=cli_config.queue.enabled)
+        execute_build(config, sync=False, dockerfile=config.dockerfile, imagename=image_ref)
+        docker_cmd = _build_docker_run_cmd(
+            config, commands, image_ref, gpus, effective_ports, mount_code=False
+        )
+    else:
+        docker_cmd = _build_docker_run_cmd(config, commands, imagename, gpus, effective_ports, mount_code=True)
 
     with get_client() as client:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
