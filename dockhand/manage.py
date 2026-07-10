@@ -6,15 +6,10 @@ from rich.table import Table
 from rich.text import Text
 
 from dockhand.client import get_client, get_client_for_host
-from dockhand.config import DockerConfig, cli_config
+from dockhand.config import DockerConfig
 from dockhand.error import error_and_exit
 from dockhand.history import get_history_entry, load_history, save_history
-from dockhand.queue import (
-    ts_get_job,
-    ts_kill,
-    ts_list,
-    ts_remove,
-)
+from dockhand.transport import entry_handle, get_transport, transport_for_entry
 
 _STATE_STYLES = {
     "running": "bold green",
@@ -33,19 +28,24 @@ def _user_command(full_cmd: str, imagename: str) -> str:
 
 
 def execute_stats(config: DockerConfig, all: bool = False):
-    """List jobs in the task spooler queue."""
+    """List live jobs for the active transport (queue or direct docker)."""
+    transport = get_transport()
     with get_client() as client:
-        jobs = ts_list(client, cwd=cli_config.remote_path)
+        jobs = transport.list_jobs(client)
 
     if not all:
         jobs = [j for j in jobs if j["state"] in ("running", "queued", "finished")]
 
     if not jobs:
-        typer.echo("No active jobs." if not all else "No jobs in queue.")
+        typer.echo("No active jobs." if not all else "No jobs.")
         return
 
     history = load_history()
-    ts_to_local = {e["ts_job_id"]: e["local_id"] for e in history if "ts_job_id" in e and "local_id" in e}
+    handle_to_local = {
+        str(entry_handle(e)): e["local_id"]
+        for e in history
+        if entry_handle(e) is not None and "local_id" in e
+    }
 
     table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
     table.add_column("ID", justify="right", style="bold")
@@ -56,8 +56,8 @@ def execute_stats(config: DockerConfig, all: bool = False):
         state = job["state"]
         style = _STATE_STYLES.get(state, "")
         status_text = Text(state, style=style)
-        local_id = ts_to_local.get(job["id"])
-        id_str = str(local_id) if local_id is not None else f"ts:{job['id']}"
+        local_id = handle_to_local.get(str(job["handle"]))
+        id_str = str(local_id) if local_id is not None else f"{transport.name}:{job['handle']}"
         user_cmd = _user_command(job["command"], config.imagename)
         table.add_row(id_str, status_text, user_cmd)
 
@@ -85,20 +85,11 @@ def execute_logs(
     n: int | None,
     follow: bool,
 ):
-    """Show logs from a job via the tsp output file."""
+    """Show logs from a job (via the tsp output file, or ``docker logs``)."""
     local_id, entry = _resolve_entry(job_id)
-    ts_job_id = entry["ts_job_id"]
-
-    if follow:
-        cmd = f"tail -f $(tsp -o {ts_job_id})"
-    elif n is not None:
-        cmd = f"tail -n {n} $(tsp -o {ts_job_id})"
-    else:
-        cmd = f"cat $(tsp -o {ts_job_id})"
-
     host = entry.get("host", "localhost")
     with get_client_for_host(host) as client:
-        returncode, _ = client.run(cmd, cwd=cli_config.remote_path)
+        returncode = transport_for_entry(entry).logs(client, entry, n=n, follow=follow)
     if returncode != 0:
         error_and_exit(f"Could not read logs for job #{local_id}. The job may still be queued and not yet started.")
 
@@ -106,19 +97,9 @@ def execute_logs(
 def execute_stop(config: DockerConfig, *, job_id: int | None = None):
     """Stop a running job or cancel a queued one."""
     local_id, entry = _resolve_entry(job_id)
-    ts_job_id = entry["ts_job_id"]
     host = entry.get("host", "localhost")
-
     with get_client_for_host(host) as client:
-        job = ts_get_job(client, ts_job_id, cwd=cli_config.remote_path)
-
-        if job is None:
-            error_and_exit(f"Job #{local_id} (tsp {ts_job_id}) not found in task spooler.")
-
-        if job["state"] != "running":
-            error_and_exit(f"Job #{local_id} is not running (state: {job['state']}). Use 'remove' for queued jobs.")
-
-        if ts_kill(client, ts_job_id, cwd=cli_config.remote_path):
+        if transport_for_entry(entry).stop(client, entry):
             typer.echo(f"Stopped job #{local_id}.")
         else:
             error_and_exit(f"Failed to stop job #{local_id}.")
@@ -129,7 +110,7 @@ def execute_remove(
     job_ids: list[int] | None = None,
     from_history: bool = False,
 ):
-    """Remove pending job(s) from the queue."""
+    """Remove pending job(s) from the queue, or clean up direct-run containers."""
     if not job_ids:
         history = load_history()
         if not history:
@@ -142,16 +123,10 @@ def execute_remove(
         if entry is None:
             typer.echo(f"Job #{local_id} not found in history.")
             continue
-        ts_job_id = entry["ts_job_id"]
         host = entry.get("host", "localhost")
         with get_client_for_host(host) as client:
-            job = ts_get_job(client, ts_job_id, cwd=cli_config.remote_path)
-            if job and job["state"] != "queued":
-                error_and_exit(
-                    f"Job #{local_id} is not queued (state: {job['state']}). Use 'stop' to terminate running jobs."
-                )
-            if ts_remove(client, ts_job_id, cwd=cli_config.remote_path):
-                typer.echo(f"Removed job #{local_id} from queue.")
+            if transport_for_entry(entry).remove(client, entry):
+                typer.echo(f"Removed job #{local_id}.")
                 removed.append(local_id)
             else:
                 typer.echo(f"Failed to remove job #{local_id} (it may have already finished).")

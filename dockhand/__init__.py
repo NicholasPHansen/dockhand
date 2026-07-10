@@ -161,6 +161,7 @@ def urgent(
     """Promote a queued job to the front of the queue."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     from dockhand.history import get_history_entry, load_history
+    from dockhand.transport import entry_handle, transport_for_entry
 
     if id is None:
         history = load_history()
@@ -175,10 +176,12 @@ def urgent(
             raise typer.Exit(1)
 
     local_id = entry["local_id"]
-    ts_job_id = entry["ts_job_id"]
+    if transport_for_entry(entry).name != "task_spooler":
+        typer.echo(f"Job #{local_id} was not queued — 'urgent' only applies to queued jobs.")
+        raise typer.Exit(1)
 
     with get_client() as client:
-        if ts_make_urgent(client, ts_job_id, cwd=cli_config.remote_path):
+        if ts_make_urgent(client, entry_handle(entry), cwd=cli_config.remote_path):
             typer.echo(f"Job #{local_id} moved to front of queue.")
         else:
             typer.echo(f"Failed to promote job #{local_id}. It may have already started or finished.")
