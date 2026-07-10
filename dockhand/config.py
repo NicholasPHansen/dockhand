@@ -32,6 +32,7 @@ class DockerConfig:
     gpus: str
     containerworkdir: str
     slots: int = 1
+    preserve_paths: list[str] = dataclasses.field(default_factory=list)
 
     @classmethod
     def load(cls, config: dict):
@@ -60,6 +61,9 @@ class DockerConfig:
         if "slots" not in docker:
             docker["slots"] = 1
 
+        if "preserve_paths" not in docker:
+            docker["preserve_paths"] = []
+
         # Only pass fields that DockerConfig expects
         return cls(
             dockerfile=docker["dockerfile"],
@@ -69,6 +73,7 @@ class DockerConfig:
             gpus=docker["gpus"],
             containerworkdir=docker["containerworkdir"],
             slots=docker["slots"],
+            preserve_paths=docker["preserve_paths"],
         )
 
     @classmethod
@@ -123,6 +128,15 @@ class DockerConfig:
                     f"Invalid value for slots option in docker config. Expected a positive integer but got {slots!r}."
                 )
             output["slots"] = slots
+
+        preserve_paths = config.get("preserve_paths")
+        if preserve_paths is not None:
+            if not isinstance(preserve_paths, list) or not all(isinstance(p, str) for p in preserve_paths):
+                error_and_exit(
+                    "Invalid value for preserve_paths option in docker config. Expected a list of strings but got "
+                    f"{preserve_paths!r}."
+                )
+            output["preserve_paths"] = preserve_paths
 
         return output
 

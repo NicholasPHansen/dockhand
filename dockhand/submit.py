@@ -28,6 +28,12 @@ def _build_docker_run_cmd(
     # Implicit code mount: remote project path → containerworkdir
     code_mount = f"-v {cli_config.remote_path}:{config.containerworkdir}:rw"
 
+    # Anonymous volumes layered on top of the code mount for paths that must keep the
+    # image's build-time contents (e.g. a virtualenv or node_modules baked in at build
+    # time) instead of being shadowed by the bind-mounted host project directory.
+    workdir = config.containerworkdir.rstrip("/")
+    preserve_mounts = [f"-v {workdir}/{path.strip('/')}" for path in config.preserve_paths]
+
     data_volumes = []
     if config.volumes is not None:
         data_volumes = [f"-v {v['hostpath']}:{v['containerpath']}:{v['permissions']}" for v in config.volumes]
@@ -41,6 +47,7 @@ def _build_docker_run_cmd(
             "run",
             "--rm",
             code_mount,
+            *preserve_mounts,
             *data_volumes,
             *gpu_flags,
             *port_flags,
