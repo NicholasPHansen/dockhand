@@ -6,7 +6,7 @@ from rich.table import Table
 from rich.text import Text
 
 from dockhand.client import get_client, get_client_for_host
-from dockhand.config import DockerConfig
+from dockhand.config import DockerConfig, cli_config
 from dockhand.error import error_and_exit
 from dockhand.history import get_history_entry, load_history, save_history
 from dockhand.transport import entry_handle, get_transport, transport_for_entry
@@ -137,3 +137,66 @@ def execute_remove(
         history = [e for e in history if e.get("local_id") not in ids_set]
         save_history(history)
         typer.echo(f"Removed {len(removed)} job(s) from history.")
+
+
+def _baked_image_refs(history: list[dict]) -> dict[str, list]:
+    """Map each distinct baked image tag in history to the job IDs that used it.
+
+    Only images dockhand built for bake delivery qualify — their ``image_ref`` differs
+    from the base ``imagename``. Mount jobs (``image_ref`` == base name, or absent) are
+    never pruned since dockhand didn't create those tags.
+    """
+    refs: dict[str, list] = {}
+    for entry in history:
+        cfg = entry.get("config", {})
+        ref = cfg.get("image_ref")
+        if ref and ref != cfg.get("imagename"):
+            refs.setdefault(ref, []).append(entry.get("local_id"))
+    return refs
+
+
+def execute_prune(config: DockerConfig, *, yes: bool = False, dry_run: bool = False):
+    """Remove baked images that no active (running/queued) job still references."""
+    history = load_history()
+    baked = _baked_image_refs(history)
+    if not baked:
+        typer.echo("No baked images to prune.")
+        return
+
+    # Keep images referenced by jobs that are still running or queued.
+    transport = get_transport()
+    with get_client() as client:
+        jobs = transport.list_jobs(client)
+    active_handles = {str(j["handle"]) for j in jobs if j["state"] in ("running", "queued")}
+    in_use = {
+        entry["config"]["image_ref"]
+        for entry in history
+        if str(entry_handle(entry)) in active_handles and entry.get("config", {}).get("image_ref")
+    }
+
+    candidates = [ref for ref in baked if ref not in in_use]
+    if not candidates:
+        typer.echo("Nothing to prune — all baked images are in use by active jobs.")
+        return
+
+    typer.echo("The following baked images will be removed:")
+    for ref in candidates:
+        job_ids = ", ".join(str(i) for i in baked[ref] if i is not None)
+        typer.echo(f"  - {ref} (jobs: {job_ids})")
+
+    if dry_run:
+        return
+    if not yes and not typer.confirm("Remove these images?"):
+        typer.echo("Aborted.")
+        return
+
+    removed = 0
+    with get_client() as client:
+        for ref in candidates:
+            returncode, _ = client.run(f"docker image rm {ref}", cwd=cli_config.remote_path, capture=True)
+            if returncode == 0:
+                typer.echo(f"Removed {ref}")
+                removed += 1
+            else:
+                typer.echo(f"Could not remove {ref} (in use or already gone).")
+    typer.echo(f"Pruned {removed} image(s).")
