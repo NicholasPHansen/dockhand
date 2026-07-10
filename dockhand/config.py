@@ -25,6 +25,9 @@ class DockerResubmitConfig:
     gpus: str | None
 
 
+CODE_DELIVERY_MODES = ("mount", "bake")
+
+
 @dataclasses.dataclass
 class DockerConfig:
     dockerfile: str
@@ -34,6 +37,8 @@ class DockerConfig:
     gpus: str
     containerworkdir: str
     preserve_paths: list[str] = dataclasses.field(default_factory=list)
+    # None means "derive from queue.enabled" (bake when queued, mount otherwise).
+    code_delivery: str | None = None
 
     @classmethod
     def load(cls, config: dict):
@@ -62,6 +67,13 @@ class DockerConfig:
         if "preserve_paths" not in docker:
             docker["preserve_paths"] = []
 
+        code_delivery = docker.get("code_delivery")
+        if code_delivery is not None and code_delivery not in CODE_DELIVERY_MODES:
+            error_and_exit(
+                f"Invalid value for code_delivery in docker config. Expected one of {CODE_DELIVERY_MODES} "
+                f"but got {code_delivery!r}."
+            )
+
         # Only pass fields that DockerConfig expects
         return cls(
             dockerfile=docker["dockerfile"],
@@ -71,7 +83,14 @@ class DockerConfig:
             gpus=docker["gpus"],
             containerworkdir=docker["containerworkdir"],
             preserve_paths=docker["preserve_paths"],
+            code_delivery=code_delivery,
         )
+
+    def resolve_code_delivery(self, queue_enabled: bool) -> str:
+        """Resolve the effective delivery mode, applying the queue-derived default."""
+        if self.code_delivery is not None:
+            return self.code_delivery
+        return "bake" if queue_enabled else "mount"
 
     @classmethod
     def validate(cls, config: dict) -> dict:
