@@ -8,7 +8,7 @@ from dockhand.config import DockerResubmitConfig, cli_config
 from dockhand.constants import CONFIG_FILENAME
 from dockhand.download import execute_download
 from dockhand.history import execute_history
-from dockhand.manage import execute_logs, execute_remove, execute_stats, execute_stop
+from dockhand.manage import execute_logs, execute_prune, execute_remove, execute_stats, execute_stop
 from dockhand.queue import ts_make_urgent
 from dockhand.resubmit import execute_resubmit
 from dockhand.submit import execute_submit
@@ -282,6 +282,16 @@ def remove(
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     job_ids = [int(i) for i in ids] if ids else None
     execute_remove(cli_config.docker, job_ids=job_ids, from_history=from_history)
+
+
+@cli.command()
+def prune(
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip the confirmation prompt.")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show what would be removed without removing.")] = False,
+):
+    """Remove baked images no longer referenced by an active job."""
+    cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
+    execute_prune(cli_config.docker, yes=yes, dry_run=dry_run)
 
 
 @cli.command()

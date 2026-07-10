@@ -96,6 +96,7 @@ All commands work with the same `.dockhand.json` configuration file. See [Config
 | `stop` | Stop a **running** job |
 | `remove` | Remove a **queued** job before it starts |
 | `urgent` | Promote a queued job to the front of the queue |
+| `prune` | Remove baked images no longer used by an active job |
 | `history` | Show history of all past runs |
 | `volumes` | List the full container filesystem as a tree |
 | `download` | Download a file from a docker volume |
@@ -355,6 +356,10 @@ zero-rebuild iteration wins. Set `code_delivery` explicitly to override the defa
 > Data `volumes` are always mounted regardless of `code_delivery`; only the *code* mount differs.
 > For guaranteed-immutable queued builds, commit before submitting — untracked file *contents*
 > are not folded into the image tag.
+
+Each distinct baked submit produces its own image tag, and `resubmit` reruns the exact tag a job
+originally built. Those tags accumulate over time; run `dockhand prune` to remove baked images that
+no running or queued job still references (`--dry-run` to preview, `-y` to skip the prompt).
 
 ### Profiles
 
