@@ -99,6 +99,15 @@ def get_history_entry(local_id: int) -> dict | None:
     return None
 
 
+def mark_stopped(local_id: int):
+    """Flag a history entry as user-stopped, so ``jobs`` can show it distinctly."""
+    history = load_history()
+    for entry in history:
+        if entry.get("local_id") == local_id:
+            entry["stopped"] = True
+    save_history(history)
+
+
 def execute_history(config: DockerConfig):
     """Show history of past Docker runs."""
     history_file = Path(HISTORY_FILENAME)

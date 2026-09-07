@@ -8,13 +8,14 @@ from rich.text import Text
 from dockhand.client import get_client, get_client_for_host
 from dockhand.config import DockerConfig, cli_config
 from dockhand.error import error_and_exit
-from dockhand.history import get_history_entry, load_history, save_history
+from dockhand.history import get_history_entry, load_history, mark_stopped, save_history
 from dockhand.transport import entry_handle, get_transport, transport_for_entry
 
 _STATE_STYLES = {
     "running": "bold green",
     "queued": "yellow",
     "finished": "dim",
+    "stopped": "yellow",
     "failed": "bold red",
     "skipped": "dim",
 }
@@ -42,10 +43,9 @@ def execute_stats(config: DockerConfig, all: bool = False):
 
     history = load_history()
     handle_to_local = {
-        str(entry_handle(e)): e["local_id"]
-        for e in history
-        if entry_handle(e) is not None and "local_id" in e
+        str(entry_handle(e)): e["local_id"] for e in history if entry_handle(e) is not None and "local_id" in e
     }
+    stopped_locals = {e["local_id"] for e in history if e.get("stopped")}
 
     table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
     table.add_column("ID", justify="right", style="bold")
@@ -54,9 +54,11 @@ def execute_stats(config: DockerConfig, all: bool = False):
 
     for job in jobs:
         state = job["state"]
+        local_id = handle_to_local.get(str(job["handle"]))
+        if local_id in stopped_locals and state in ("finished", "failed"):
+            state = "stopped"
         style = _STATE_STYLES.get(state, "")
         status_text = Text(state, style=style)
-        local_id = handle_to_local.get(str(job["handle"]))
         id_str = str(local_id) if local_id is not None else f"{transport.name}:{job['handle']}"
         user_cmd = _user_command(job["command"], config.imagename)
         table.add_row(id_str, status_text, user_cmd)
@@ -100,6 +102,7 @@ def execute_stop(config: DockerConfig, *, job_id: int | None = None):
     host = entry.get("host", "localhost")
     with get_client_for_host(host) as client:
         if transport_for_entry(entry).stop(client, entry):
+            mark_stopped(local_id)
             typer.echo(f"Stopped job #{local_id}.")
         else:
             error_and_exit(f"Failed to stop job #{local_id}.")
