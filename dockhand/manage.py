@@ -1,6 +1,7 @@
 """Docker container lifecycle management (logs, stop, remove, stats)."""
 
 import time
+from datetime import datetime
 
 import typer
 from rich.console import Console
@@ -50,10 +51,10 @@ def _format_duration(seconds: float) -> str:
     return f"{days}d{hours:02d}h" if hours else f"{days}d"
 
 
-def _format_ago(ts: float | None, now: float) -> str:
+def _format_time(ts: float | None) -> str:
     if ts is None:
         return "-"
-    return f"{_format_duration(now - ts)} ago"
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def execute_stats(config: DockerConfig, all: bool = False):
@@ -123,9 +124,7 @@ def execute_stats(config: DockerConfig, all: bool = False):
         status_text = Text(state, style=style)
         id_str = str(local_id) if local_id is not None else f"{transport.name}:{job['handle']}"
         user_cmd = _user_command(job["command"], config.imagename)
-        table.add_row(
-            id_str, status_text, _format_ago(started_at, now), _format_ago(ended_at, now), duration_str, user_cmd
-        )
+        table.add_row(id_str, status_text, _format_time(started_at), _format_time(ended_at), duration_str, user_cmd)
 
     if history_changed:
         save_history(history)

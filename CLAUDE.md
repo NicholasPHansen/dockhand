@@ -118,7 +118,7 @@ Stores container runs in `.dockhand_history.json` as JSON. Each entry contains:
 
 Used by `resubmit` (look up a previous run and re-run with overrides, pinning the original baked image when unchanged), `logs`, `stop`, `remove`, `jobs`, `urgent`, `prune` (default to latest if no ID given). Job-management commands dispatch to the transport recorded on the entry (`transport_for_entry`), so `logs`/`stop`/`remove` work the same regardless of whether a job went through the queue or ran directly.
 
-`started_at`/`ended_at` aren't queried from tsp/docker (neither exposes exact start/end timestamps cheaply for both transports) — `jobs` and `logs` each stamp them lazily the first time they happen to observe a job in the running/terminal state, so a job never checked on while running will show no start time once it finishes. `dockhand jobs` displays these as Started/Ended (relative, e.g. `5m ago`) and Duration (elapsed while running, total once finished) columns; `dockhand logs` prints a one-line "running for Xm" / "finished in Xm" header before the log output.
+`started_at`/`ended_at` aren't queried from tsp/docker (neither exposes exact start/end timestamps cheaply for both transports) — `jobs` and `logs` each stamp them lazily the first time they happen to observe a job in the running/terminal state, so a job never checked on while running will show no start time once it finishes. `dockhand jobs` displays these as Started/Ended (absolute, `%Y-%m-%d %H:%M:%S`) and Duration (elapsed while running, total once finished) columns; `dockhand logs` prints a one-line "running for Xm" / "finished in Xm" header before the log output.
 
 ### Design Patterns
 
