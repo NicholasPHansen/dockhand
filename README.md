@@ -91,8 +91,8 @@ All commands work with the same `.dockhand.json` configuration file. See [Config
 | `submit` | Build the image and queue a container run |
 | `run` | Queue a container run from an already-built image |
 | `install` | Build the Docker image without running it |
-| `jobs` | List active (running/queued) jobs — use `--all` for finished jobs too |
-| `logs` | Show logs from a job — use `--follow`/`-f` to stream live |
+| `jobs` | List active (running/queued) jobs, with start/end/duration — use `--all` for finished jobs too |
+| `logs` | Show logs from a job, preceded by a running/finished duration line — use `--follow`/`-f` to stream live |
 | `stop` | Stop a **running** job |
 | `remove` | Remove a **queued** job before it starts |
 | `urgent` | Promote a queued job to the front of the queue |
@@ -179,6 +179,12 @@ dockhand resubmit --gpus 2
 ```
 
 **Note:** If you've installed dockhand globally, you can omit `uv run`.
+
+`jobs` shows Started/Ended/Duration for each job, and `logs` prints a one-line
+`running for 5m30s` / `finished in 12m45s` header before the log output. Neither the
+queue nor docker exposes exact start/end timestamps cheaply, so these are recorded the
+first time `jobs` or `logs` happens to observe a job as running or finished — a job
+never checked on while running will show no duration once it's done.
 
 Resubmitting a job that ran in [`bake`](#code-delivery-mount-vs-bake) mode reruns the exact
 image it originally built — recorded per job — rather than rebuilding from current code, so a
