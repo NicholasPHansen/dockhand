@@ -68,14 +68,21 @@ def extract_docker_command(input_string):
         return None
 
 
+# Matches the "real/user/sys" Times(r/u/s) field ts prints for finished jobs, e.g.
+# "25851.03/2.62/3.05". Only real (wall-clock) seconds are kept. Searched for rather than
+# read off a fixed column: ts pads this field with spaces rather than "-/-/-" placeholders
+# while a job is still running/queued, which shifts the column count under a positional split.
+_TIMES_RE = re.compile(r"(\d+\.\d+)/\d+\.\d+/\d+\.\d+")
+
+
 def _parse_ts_list(output: str) -> list[dict]:
     """Parse ts -l output into a list of dicts.
 
     Expected format (header line followed by job lines):
         ID   State      Output               E-Level  Times(r/u/s)   Command [run=N/M]
         0    finished   /tmp/ts-out.XXX      0        0.1/0.0/0.0    docker run ...
-        1    running    /tmp/ts-out.YYY      -        -/-/-          docker run ...
-        2    queued     (file)               -        -/-/-          docker run ...
+        1    running    /tmp/ts-out.YYY                              docker run ...
+        2    queued     (file)                                       docker run ...
     """
     jobs = []
     lines = output.strip().split("\n")
@@ -95,12 +102,16 @@ def _parse_ts_list(output: str) -> list[dict]:
             job_id = int(parts[0])
         except ValueError:
             continue
+        times_match = _TIMES_RE.search(line)
         jobs.append(
             {
                 "id": job_id,
                 "state": parts[1],  # queued / running / finished / failed / skipped
                 "output_file": parts[2] if len(parts) > 2 else None,
                 "exit_code": parts[3] if len(parts) > 3 else None,
+                # Authoritative wall-clock duration from ts itself, once the job has
+                # finished — exact regardless of when this was observed.
+                "duration_seconds": float(times_match.group(1)) if times_match else None,
                 "command": command if command else "",
             }
         )

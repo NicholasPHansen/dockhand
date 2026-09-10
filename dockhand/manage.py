@@ -1,7 +1,8 @@
 """Docker container lifecycle management (logs, stop, remove, stats)."""
 
+import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import typer
 from rich.console import Console
@@ -9,10 +10,11 @@ from rich.table import Table
 from rich.text import Text
 
 from dockhand.client import get_client, get_client_for_host
+from dockhand.client.base import Client
 from dockhand.config import DockerConfig, cli_config
 from dockhand.error import error_and_exit
 from dockhand.history import get_history_entry, load_history, mark_job_time, mark_stopped, save_history
-from dockhand.transport import entry_handle, get_transport, transport_for_entry
+from dockhand.transport import Transport, entry_handle, get_transport, transport_for_entry
 
 _STATE_STYLES = {
     "running": "bold green",
@@ -57,77 +59,139 @@ def _format_time(ts: float | None) -> str:
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
 
+_DOCKER_TIME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6})\d*Z$")
+
+
+def _docker_started_at(client: Client, container_name: str) -> float | None:
+    """The container's real start time via `docker inspect`, or None if it can't be
+    determined (container never existed under this name, already removed, etc.) — the
+    caller falls back to an approximate timestamp in that case."""
+    returncode, stdout = client.run(
+        f"docker inspect --format '{{{{.State.StartedAt}}}}' {container_name}",
+        cwd=cli_config.remote_path,
+        capture=True,
+    )
+    if returncode != 0:
+        return None
+    ts = stdout.strip()
+    match = _DOCKER_TIME_RE.match(ts)
+    if not match or ts.startswith("0001-01-01"):  # Go zero value = never started
+        return None
+    dt = datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _observe_job_time(
+    client: Client, transport: Transport, entry: dict, *, state: str, duration_seconds: float | None, now: float
+) -> bool:
+    """Fill in started_at/ended_at the first time a job is observed in that state.
+
+    started_at for a *running* job is fetched from the container's actual `docker
+    inspect` start time when possible (exact, independent of when this happens to run) —
+    falling back to "now" only if the container can't be inspected (e.g. a job whose
+    container predates deterministic naming). ended_at for a job that has already
+    finished is derived from ts's own authoritative elapsed-time field when available
+    (`started_at + duration_seconds`), rather than guessed from the observation time,
+    since the container may already be gone (`--rm`) by the time anyone checks.
+
+    Mutates ``entry`` in place. Returns whether anything changed.
+    """
+    changed = False
+    if state == "running" and "started_at" not in entry:
+        container = transport.container_name(entry)
+        started_at = _docker_started_at(client, container) if container else None
+        entry["started_at"] = started_at if started_at is not None else now
+        changed = True
+    elif state in _TERMINAL_STATES and "ended_at" not in entry:
+        started_at = entry.get("started_at")
+        if duration_seconds is not None and started_at is not None:
+            entry["ended_at"] = started_at + duration_seconds
+        else:
+            entry["ended_at"] = now
+        changed = True
+    return changed
+
+
 def execute_stats(config: DockerConfig, all: bool = False):
     """List live jobs for the active transport (queue or direct docker).
 
     Defaults to the most recent 30 jobs, newest (highest ID) first. ``--all``
     lifts the 30-job cap and also includes finished/failed/stopped jobs.
 
-    Start/end times aren't available from the queue or docker directly, so they're
-    recorded the first time a job is *observed* running or finished (i.e. the first
-    time this command happens to be run while the job is in that state). This means
-    a job never checked on while running will show no start time once it finishes.
+    Started is the container's real `docker inspect` start time where available (see
+    ``_docker_started_at``); Duration for a finished task-spooler job comes straight from
+    ts's own elapsed-time field. Both are exact regardless of when this command happens to
+    run. The remaining fallback (stamping "now" the first time a job is observed in a
+    state) only kicks in for jobs whose container can't be inspected — e.g. one submitted
+    before container naming was added, or already cleaned up.
     """
     transport = get_transport()
     with get_client() as client:
         jobs = transport.list_jobs(client)
 
-    if not all:
-        jobs = [j for j in jobs if j["state"] in ("running", "queued", "finished")]
+        if not all:
+            jobs = [j for j in jobs if j["state"] in ("running", "queued", "finished")]
 
-    if not jobs:
-        typer.echo("No active jobs." if not all else "No jobs.")
-        return
+        if not jobs:
+            typer.echo("No active jobs." if not all else "No jobs.")
+            return
 
-    history = load_history()
-    handle_to_local = {
-        str(entry_handle(e)): e["local_id"] for e in history if entry_handle(e) is not None and "local_id" in e
-    }
-    entry_by_local = {e["local_id"]: e for e in history if "local_id" in e}
-    stopped_locals = {e["local_id"] for e in history if e.get("stopped")}
+        history = load_history()
+        handle_to_local = {
+            str(entry_handle(e)): e["local_id"] for e in history if entry_handle(e) is not None and "local_id" in e
+        }
+        entry_by_local = {e["local_id"]: e for e in history if "local_id" in e}
+        stopped_locals = {e["local_id"] for e in history if e.get("stopped")}
 
-    jobs.sort(key=lambda j: handle_to_local.get(str(j["handle"]), -1), reverse=True)
-    if not all:
-        jobs = jobs[:_JOBS_DISPLAY_LIMIT]
+        jobs.sort(key=lambda j: handle_to_local.get(str(j["handle"]), -1), reverse=True)
+        if not all:
+            jobs = jobs[:_JOBS_DISPLAY_LIMIT]
 
-    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
-    table.add_column("ID", justify="right", style="bold")
-    table.add_column("Status")
-    table.add_column("Started")
-    table.add_column("Ended")
-    table.add_column("Duration")
-    table.add_column("Command")
+        table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+        table.add_column("ID", justify="right", style="bold")
+        table.add_column("Status")
+        table.add_column("Started")
+        table.add_column("Ended")
+        table.add_column("Duration")
+        table.add_column("Command")
 
-    now = time.time()
-    history_changed = False
+        now = time.time()
+        history_changed = False
 
-    for job in jobs:
-        state = job["state"]
-        local_id = handle_to_local.get(str(job["handle"]))
-        if local_id in stopped_locals and state in ("finished", "failed"):
-            state = "stopped"
+        for job in jobs:
+            state = job["state"]
+            local_id = handle_to_local.get(str(job["handle"]))
+            if local_id in stopped_locals and state in ("finished", "failed"):
+                state = "stopped"
 
-        entry = entry_by_local.get(local_id)
-        if entry is not None:
-            if state == "running" and "started_at" not in entry:
-                entry["started_at"] = now
-                history_changed = True
-            elif state in _TERMINAL_STATES and "ended_at" not in entry:
-                entry["ended_at"] = now
-                history_changed = True
+            entry = entry_by_local.get(local_id)
+            duration_seconds = job.get("duration_seconds")
+            if entry is not None:
+                job_transport = transport_for_entry(entry)
+                if _observe_job_time(
+                    client, job_transport, entry, state=state, duration_seconds=duration_seconds, now=now
+                ):
+                    history_changed = True
 
-        started_at = entry.get("started_at") if entry else None
-        ended_at = entry.get("ended_at") if entry else None
-        duration_str = _format_duration((ended_at or now) - started_at) if started_at is not None else "-"
+            started_at = entry.get("started_at") if entry else None
+            ended_at = entry.get("ended_at") if entry else None
+            if duration_seconds is not None:
+                duration_str = _format_duration(duration_seconds)
+            elif started_at is not None:
+                duration_str = _format_duration((ended_at or now) - started_at)
+            else:
+                duration_str = "-"
 
-        style = _STATE_STYLES.get(state, "")
-        status_text = Text(state, style=style)
-        id_str = str(local_id) if local_id is not None else f"{transport.name}:{job['handle']}"
-        user_cmd = _user_command(job["command"], config.imagename)
-        table.add_row(id_str, status_text, _format_time(started_at), _format_time(ended_at), duration_str, user_cmd)
+            style = _STATE_STYLES.get(state, "")
+            status_text = Text(state, style=style)
+            id_str = str(local_id) if local_id is not None else f"{transport.name}:{job['handle']}"
+            user_cmd = _user_command(job["command"], config.imagename)
+            table.add_row(
+                id_str, status_text, _format_time(started_at), _format_time(ended_at), duration_str, user_cmd
+            )
 
-    if history_changed:
-        save_history(history)
+        if history_changed:
+            save_history(history)
 
     Console().print(table)
 
@@ -176,12 +240,10 @@ def execute_logs(
             state = job["state"]
             if entry.get("stopped") and state in ("finished", "failed"):
                 state = "stopped"
-            if state == "running" and "started_at" not in entry:
-                mark_job_time(local_id, started_at=now)
-                entry["started_at"] = now
-            elif state in _TERMINAL_STATES and "ended_at" not in entry:
-                mark_job_time(local_id, ended_at=now)
-                entry["ended_at"] = now
+            if _observe_job_time(
+                client, transport, entry, state=state, duration_seconds=job.get("duration_seconds"), now=now
+            ):
+                mark_job_time(local_id, started_at=entry.get("started_at"), ended_at=entry.get("ended_at"))
             typer.echo(_duration_header(local_id, state, entry.get("started_at"), entry.get("ended_at"), now))
         returncode = transport.logs(client, entry, n=n, follow=follow)
     if returncode != 0:

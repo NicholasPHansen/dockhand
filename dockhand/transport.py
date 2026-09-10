@@ -58,6 +58,11 @@ class Transport(ABC):
         """Live jobs as dicts: ``{handle, state, command}`` (states normalized)."""
 
     @abstractmethod
+    def container_name(self, entry: dict) -> str | None:
+        """The docker container name backing this job, for ``docker inspect`` (e.g. exact
+        start time). None if the job predates deterministic container naming."""
+
+    @abstractmethod
     def logs(self, client: Client, entry: dict, *, n: int | None, follow: bool) -> int:
         """Stream a job's logs. Returns the command's exit code."""
 
@@ -74,7 +79,9 @@ class TaskSpoolerTransport(Transport):
     name = "task_spooler"
 
     def run_flags(self, local_id: int) -> list[str]:
-        return ["--rm"]
+        # Named (as well as --rm) so a running job's container can still be inspected for
+        # its exact start time — ts itself doesn't expose one.
+        return ["--rm", "--name", _container_name(local_id)]
 
     def submit(self, client, docker_cmd, *, local_id, slots, urgent):
         job_id = ts_submit(client, docker_cmd, cwd=cli_config.remote_path, slots=slots)
@@ -84,7 +91,20 @@ class TaskSpoolerTransport(Transport):
 
     def list_jobs(self, client):
         jobs = ts_list(client, cwd=cli_config.remote_path)
-        return [{"handle": j["id"], "state": j["state"], "command": j["command"]} for j in jobs]
+        return [
+            {
+                "handle": j["id"],
+                "state": j["state"],
+                "command": j["command"],
+                "duration_seconds": j.get("duration_seconds"),
+            }
+            for j in jobs
+        ]
+
+    def container_name(self, entry):
+        local_id = entry.get("local_id")
+        # Only jobs submitted after this transport started naming containers have one.
+        return _container_name(local_id) if local_id is not None else None
 
     def logs(self, client, entry, *, n, follow):
         job_id = entry_handle(entry)
@@ -159,6 +179,9 @@ class DockerTransport(Transport):
             command = parts[2].strip('"') if len(parts) > 2 else ""
             jobs.append({"handle": name, "state": _DOCKER_STATE_MAP.get(state, state), "command": command})
         return jobs
+
+    def container_name(self, entry):
+        return entry_handle(entry)
 
     def logs(self, client, entry, *, n, follow):
         name = entry_handle(entry)
