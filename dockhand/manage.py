@@ -37,6 +37,10 @@ _JOBS_DISPLAY_LIMIT = 30
 
 _TERMINAL_STATES = ("finished", "failed", "stopped")
 
+# Sort rank for `dockhand jobs`: running, then queued, then everything terminal
+# (finished/failed/stopped/skipped) grouped last.
+_JOB_CATEGORY_ORDER = {"running": 0, "queued": 1}
+
 
 def _format_duration(seconds: float) -> str:
     """Compact elapsed-time string, e.g. ``45s``, ``5m30s``, ``2h15m``, ``1d04h``."""
@@ -143,7 +147,22 @@ def execute_stats(config: DockerConfig, all: bool = False):
         entry_by_local = {e["local_id"]: e for e in history if "local_id" in e}
         stopped_locals = {e["local_id"] for e in history if e.get("stopped")}
 
-        jobs.sort(key=lambda j: handle_to_local.get(str(j["handle"]), -1), reverse=True)
+        def _effective_state(job: dict) -> str:
+            local_id = handle_to_local.get(str(job["handle"]))
+            state = job["state"]
+            if local_id in stopped_locals and state in ("finished", "failed"):
+                return "stopped"
+            return state
+
+        # Group by category (running, then queued, then finished/failed/stopped), newest
+        # job id first within each group — matches how an operator scans the list: what's
+        # active right now, what's next, then history.
+        jobs.sort(
+            key=lambda j: (
+                _JOB_CATEGORY_ORDER.get(_effective_state(j), 2),
+                -handle_to_local.get(str(j["handle"]), -1),
+            )
+        )
         if not all:
             jobs = jobs[:_JOBS_DISPLAY_LIMIT]
 
