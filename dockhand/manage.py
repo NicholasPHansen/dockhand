@@ -28,8 +28,15 @@ def _user_command(full_cmd: str, imagename: str) -> str:
     return full_cmd
 
 
+_JOBS_DISPLAY_LIMIT = 30
+
+
 def execute_stats(config: DockerConfig, all: bool = False):
-    """List live jobs for the active transport (queue or direct docker)."""
+    """List live jobs for the active transport (queue or direct docker).
+
+    Defaults to the most recent 30 jobs, newest (highest ID) first. ``--all``
+    lifts the 30-job cap and also includes finished/failed/stopped jobs.
+    """
     transport = get_transport()
     with get_client() as client:
         jobs = transport.list_jobs(client)
@@ -46,6 +53,10 @@ def execute_stats(config: DockerConfig, all: bool = False):
         str(entry_handle(e)): e["local_id"] for e in history if entry_handle(e) is not None and "local_id" in e
     }
     stopped_locals = {e["local_id"] for e in history if e.get("stopped")}
+
+    jobs.sort(key=lambda j: handle_to_local.get(str(j["handle"]), -1), reverse=True)
+    if not all:
+        jobs = jobs[:_JOBS_DISPLAY_LIMIT]
 
     table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
     table.add_column("ID", justify="right", style="bold")
