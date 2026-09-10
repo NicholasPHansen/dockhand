@@ -110,11 +110,15 @@ Stores container runs in `.dockhand_history.json` as JSON. Each entry contains:
   "transport": "task_spooler",   // or "docker"
   "handle": 12,                  // tsp job id, or container name for direct runs
   "ts_job_id": 12,                // task_spooler transport only
-  "host": "remote.example.com"    // or "localhost"
+  "host": "remote.example.com",   // or "localhost"
+  "started_at": 1234567891.0,     // optional, set the first time `jobs` observes it running
+  "ended_at": 1234567895.0        // optional, set the first time `jobs` observes it finished/failed/stopped
 }
 ```
 
 Used by `resubmit` (look up a previous run and re-run with overrides, pinning the original baked image when unchanged), `logs`, `stop`, `remove`, `jobs`, `urgent`, `prune` (default to latest if no ID given). Job-management commands dispatch to the transport recorded on the entry (`transport_for_entry`), so `logs`/`stop`/`remove` work the same regardless of whether a job went through the queue or ran directly.
+
+`started_at`/`ended_at` aren't queried from tsp/docker (neither exposes exact start/end timestamps cheaply for both transports) — `jobs` and `logs` each stamp them lazily the first time they happen to observe a job in the running/terminal state, so a job never checked on while running will show no start time once it finishes. `dockhand jobs` displays these as Started/Ended (relative, e.g. `5m ago`) and Duration (elapsed while running, total once finished) columns; `dockhand logs` prints a one-line "running for Xm" / "finished in Xm" header before the log output.
 
 ### Design Patterns
 

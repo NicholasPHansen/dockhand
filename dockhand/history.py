@@ -108,6 +108,28 @@ def mark_stopped(local_id: int):
     save_history(history)
 
 
+def mark_job_time(local_id: int, *, started_at: float | None = None, ended_at: float | None = None):
+    """Record start/end timestamps for a job, without overwriting ones already set.
+
+    Neither the queue nor docker exposes exact start/end timestamps cheaply, so these
+    are stamped lazily the first time a command happens to observe the job in that
+    state (see ``manage.py``).
+    """
+    history = load_history()
+    changed = False
+    for entry in history:
+        if entry.get("local_id") != local_id:
+            continue
+        if started_at is not None and "started_at" not in entry:
+            entry["started_at"] = started_at
+            changed = True
+        if ended_at is not None and "ended_at" not in entry:
+            entry["ended_at"] = ended_at
+            changed = True
+    if changed:
+        save_history(history)
+
+
 def execute_history(config: DockerConfig):
     """Show history of past Docker runs."""
     history_file = Path(HISTORY_FILENAME)
