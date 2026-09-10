@@ -144,9 +144,11 @@ def stop(
 
 @cli.command()
 def jobs(
-    all: Annotated[bool, typer.Option("--all", help="Include finished and failed jobs.")] = False,
+    all: Annotated[
+        bool, typer.Option("--all", help="Show every job, including finished/failed (no 30-job limit).")
+    ] = False,
 ):
-    """List running and queued jobs (defaults to active only)."""
+    """List jobs, newest first (defaults to the last 30 active jobs)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     execute_stats(cli_config.docker, all=all)
 
