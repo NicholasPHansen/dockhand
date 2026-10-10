@@ -85,6 +85,18 @@ def _docker_started_at(client: Client, container_name: str) -> float | None:
     return dt.timestamp()
 
 
+def _host_now(client: Client) -> float:
+    """Current time on the job host. started_at comes from the host's `docker inspect`, so
+    elapsed time must be measured against the host clock too — otherwise clock skew between
+    this machine and the host shows up as a wrong (or clamped-to-0s) running duration.
+    Falls back to the local clock if the host can't be asked."""
+    returncode, stdout = client.run("date +%s", cwd=cli_config.remote_path, capture=True)
+    try:
+        return float(stdout.strip()) if returncode == 0 else time.time()
+    except ValueError:
+        return time.time()
+
+
 def _observe_job_time(
     client: Client, transport: Transport, entry: dict, *, state: str, duration_seconds: float | None, now: float
 ) -> bool:
@@ -174,7 +186,7 @@ def execute_stats(config: DockerConfig, all: bool = False):
         table.add_column("Duration")
         table.add_column("Command")
 
-        now = time.time()
+        now = _host_now(client)
         history_changed = False
 
         for job in jobs:
@@ -255,7 +267,7 @@ def execute_logs(
         jobs = transport.list_jobs(client)
         job = next((j for j in jobs if str(j["handle"]) == str(entry_handle(entry))), None)
         if job is not None:
-            now = time.time()
+            now = _host_now(client)
             state = job["state"]
             if entry.get("stopped") and state in ("finished", "failed"):
                 state = "stopped"
