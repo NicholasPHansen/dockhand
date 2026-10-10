@@ -14,6 +14,7 @@ from dockhand.client.base import Client
 from dockhand.config import DockerConfig, cli_config
 from dockhand.error import error_and_exit
 from dockhand.history import get_history_entry, load_history, mark_job_time, mark_stopped, save_history
+from dockhand.queue import ts_list, ts_max_slots
 from dockhand.transport import Transport, entry_handle, get_transport, transport_for_entry
 
 _STATE_STYLES = {
@@ -225,6 +226,40 @@ def execute_stats(config: DockerConfig, all: bool = False):
             save_history(history)
 
     Console().print(table)
+
+
+def execute_queue(config: DockerConfig):
+    """Show the host's whole task-spooler queue, including other projects' jobs.
+
+    Task spooler runs one shared queue per host, so jobs submitted by other projects
+    on the same host already sit in the same `tsp -l` output — this prints it directly
+    instead of going through this project's history, which only know about its own jobs.
+    """
+    with get_client() as client:
+        jobs = ts_list(client, cwd=cli_config.remote_path)
+        max_slots = ts_max_slots(client, cwd=cli_config.remote_path)
+
+    if not jobs:
+        typer.echo("Task spooler queue is empty.")
+        return
+
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+    table.add_column("ID", justify="right", style="bold")
+    table.add_column("Status")
+    table.add_column("Duration")
+    table.add_column("Command")
+
+    for job in jobs:
+        state = job["state"]
+        duration = _format_duration(job["duration_seconds"]) if job.get("duration_seconds") is not None else "-"
+        table.add_row(str(job["id"]), Text(state, style=_STATE_STYLES.get(state, "")), duration, Text(job["command"]))
+
+    Console().print(table)
+
+    running = sum(1 for j in jobs if j["state"] == "running")
+    queued = sum(1 for j in jobs if j["state"] == "queued")
+    slots_str = f"{running} running / {max_slots} slots" if max_slots is not None else f"{running} running"
+    typer.echo(f"\n{slots_str}, {queued} queued.")
 
 
 def _resolve_entry(job_id: int | None) -> tuple[int, dict]:

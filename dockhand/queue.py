@@ -53,6 +53,17 @@ def ts_get_job(client: Client, job_id: int, cwd: str) -> dict | None:
     return next((j for j in jobs if j["id"] == job_id), None)
 
 
+def ts_max_slots(client: Client, cwd: str) -> int | None:
+    """Current max slot count configured for the host's task spooler (`tsp -S`)."""
+    returncode, stdout = client.run("tsp -S", cwd=cwd, capture=True)
+    if returncode != 0:
+        return None
+    try:
+        return int(stdout.strip())
+    except ValueError:
+        return None
+
+
 def extract_docker_command(input_string):
     # Regex breakdown:
     # -v\s+\S+:\S+:\w+  -> Matches the -v flag and the path mapping

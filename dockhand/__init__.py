@@ -8,7 +8,7 @@ from dockhand.config import DockerResubmitConfig, cli_config
 from dockhand.constants import CONFIG_FILENAME
 from dockhand.download import execute_download
 from dockhand.history import execute_history
-from dockhand.manage import execute_logs, execute_prune, execute_remove, execute_stats, execute_stop
+from dockhand.manage import execute_logs, execute_prune, execute_queue, execute_remove, execute_stats, execute_stop
 from dockhand.queue import ts_make_urgent
 from dockhand.resubmit import execute_resubmit
 from dockhand.submit import execute_submit
@@ -147,9 +147,18 @@ def jobs(
     all: Annotated[
         bool, typer.Option("--all", help="Show every job, including finished/failed (no 30-job limit).")
     ] = False,
+    queue: Annotated[
+        bool,
+        typer.Option(
+            "--queue", help="Show the host's whole task-spooler queue, including other projects' jobs."
+        ),
+    ] = False,
 ):
     """List jobs, newest first (defaults to the last 30 active jobs)."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
+    if queue:
+        execute_queue(cli_config.docker)
+        return
     execute_stats(cli_config.docker, all=all)
 
 
