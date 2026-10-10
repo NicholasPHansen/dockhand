@@ -14,7 +14,7 @@ from dockhand.client.base import Client
 from dockhand.config import DockerConfig, cli_config
 from dockhand.error import error_and_exit
 from dockhand.history import get_history_entry, load_history, mark_job_time, mark_stopped, save_history
-from dockhand.queue import ts_list, ts_max_slots
+from dockhand.queue import ts_list, ts_max_slots, ts_start_times
 from dockhand.transport import Transport, entry_handle, get_transport, transport_for_entry
 
 _STATE_STYLES = {
@@ -238,21 +238,55 @@ def execute_queue(config: DockerConfig):
     with get_client() as client:
         jobs = ts_list(client, cwd=cli_config.remote_path)
         max_slots = ts_max_slots(client, cwd=cli_config.remote_path)
+        if jobs:
+            started = ts_start_times(client, [j["id"] for j in jobs if j["state"] != "queued"], cli_config.remote_path)
+            now = _host_now(client)
 
     if not jobs:
         typer.echo("Task spooler queue is empty.")
         return
 
+    # Same grouping as `dockhand jobs`: running, then queued (in ts's queue order), then the
+    # rest newest-started first. ts IDs aren't chronological (they restart with the server).
+    # The sort is stable, so running/queued jobs keep ts's order.
+    jobs.sort(
+        key=lambda j: (
+            _JOB_CATEGORY_ORDER.get(j["state"], 2),
+            0 if j["state"] in _JOB_CATEGORY_ORDER else -started.get(j["id"], 0),
+        )
+    )
+
     table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
     table.add_column("ID", justify="right", style="bold")
+    table.add_column("Project")
     table.add_column("Status")
+    table.add_column("Started")
     table.add_column("Duration")
     table.add_column("Command")
+    table.add_column("TS ID", justify="right", style="dim")
 
     for job in jobs:
         state = job["state"]
-        duration = _format_duration(job["duration_seconds"]) if job.get("duration_seconds") is not None else "-"
-        table.add_row(str(job["id"]), Text(state, style=_STATE_STYLES.get(state, "")), duration, Text(job["command"]))
+        start = started.get(job["id"])
+        if job.get("duration_seconds") is not None:
+            duration = _format_duration(job["duration_seconds"])
+        elif state == "running" and start is not None:
+            duration = _format_duration(now - start)
+        else:
+            duration = "-"
+        # dockhand's own job number, as used by `logs`/`stop`/`urgent` in the submitting project.
+        # Jobs that predate container naming (or weren't submitted by dockhand) have none.
+        name_match = re.fullmatch(r"dockhand-(\d+)", job.get("container_name") or "")
+        project = (job.get("image") or "-").split(":", 1)[0]
+        table.add_row(
+            name_match.group(1) if name_match else "-",
+            project,
+            Text(state, style=_STATE_STYLES.get(state, "")),
+            _format_time(start),
+            duration,
+            Text(job["command"]),
+            str(job["id"]),
+        )
 
     Console().print(table)
 

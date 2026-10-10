@@ -1,6 +1,7 @@
 """Task spooler (ts) queue integration."""
 
 import re
+from datetime import datetime
 
 from dockhand.client.base import Client
 
@@ -85,6 +86,11 @@ def extract_docker_command(input_string):
 # while a job is still running/queued, which shifts the column count under a positional split.
 _TIMES_RE = re.compile(r"(\d+\.\d+)/\d+\.\d+/\d+\.\d+")
 
+# The image is the token right after the last `-v host:container:perm` mount (same anchor
+# as extract_docker_command); the container name is dockhand's `--name dockhand-<local_id>`.
+_IMAGE_RE = re.compile(r".*-v\s+\S+:\S+:\w+\s+(\S+)")
+_NAME_RE = re.compile(r"--name\s+(\S+)")
+
 
 def _parse_ts_list(output: str) -> list[dict]:
     """Parse ts -l output into a list of dicts.
@@ -114,6 +120,8 @@ def _parse_ts_list(output: str) -> list[dict]:
         except ValueError:
             continue
         times_match = _TIMES_RE.search(line)
+        image_match = _IMAGE_RE.match(line)
+        name_match = _NAME_RE.search(line)
         jobs.append(
             {
                 "id": job_id,
@@ -124,7 +132,43 @@ def _parse_ts_list(output: str) -> list[dict]:
                 # finished — exact regardless of when this was observed.
                 "duration_seconds": float(times_match.group(1)) if times_match else None,
                 "command": command if command else "",
+                "image": image_match.group(1) if image_match else None,
+                "container_name": name_match.group(1) if name_match else None,
             }
         )
 
     return jobs
+
+
+def ts_start_times(client: Client, job_ids: list[int], cwd: str) -> dict[int, float]:
+    """Start time (epoch seconds) of each started job, from `tsp -i`, in one round trip.
+
+    `tsp -l` has no start time; `tsp -i` prints one per job in the host's local time
+    ("Start time: Sat Oct 10 07:18:53 2026"), so the host's UTC offset is fetched alongside
+    to convert it. Queued jobs have no start time and are simply absent from the result.
+    """
+    if not job_ids:
+        return {}
+    loop = "; ".join(f"echo @@{i}; tsp -i {i} | grep '^Start time:'" for i in job_ids)
+    returncode, stdout = client.run(f"date +%z; {loop}", cwd=cwd, capture=True)
+    lines = stdout.strip().split("\n")
+    if returncode != 0 or not lines:
+        return {}
+    try:
+        host_tz = datetime.strptime(lines[0].strip(), "%z").tzinfo
+    except ValueError:
+        return {}
+
+    starts = {}
+    current = None
+    for line in lines[1:]:
+        if line.startswith("@@"):
+            current = int(line[2:])
+        elif line.startswith("Start time:") and current is not None:
+            # ctime pads single-digit days ("Sep  7"); collapse whitespace before parsing.
+            text = " ".join(line.removeprefix("Start time:").split())
+            try:
+                starts[current] = datetime.strptime(text, "%a %b %d %H:%M:%S %Y").replace(tzinfo=host_tz).timestamp()
+            except ValueError:
+                pass
+    return starts

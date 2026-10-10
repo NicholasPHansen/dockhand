@@ -91,7 +91,7 @@ All commands work with the same `.dockhand.json` configuration file. See [Config
 | `submit` | Build the image and queue a container run |
 | `run` | Queue a container run from an already-built image |
 | `install` | Build the Docker image without running it |
-| `jobs` | List active (running/queued) jobs, with start/end/duration — use `--all` for finished jobs too |
+| `jobs` | List active (running/queued) jobs, with start/end/duration — use `--all` for finished jobs too, or `--queue` for the host's whole task-spooler queue across all projects |
 | `logs` | Show logs from a job, preceded by a running/finished duration line — use `--follow`/`-f` to stream live |
 | `stop` | Stop a **running** job |
 | `remove` | Remove a **queued** job before it starts |
@@ -147,6 +147,9 @@ dockhand jobs
 # Check all jobs including finished
 dockhand jobs --all
 
+# Show the host's whole task-spooler queue, including other projects' jobs
+dockhand jobs --queue
+
 # Stream logs from the last job
 dockhand logs --follow
 
@@ -181,10 +184,23 @@ dockhand resubmit --gpus 2
 **Note:** If you've installed dockhand globally, you can omit `uv run`.
 
 `jobs` shows Started/Ended/Duration for each job, and `logs` prints a one-line
-`running for 5m30s` / `finished in 12m45s` header before the log output. Neither the
-queue nor docker exposes exact start/end timestamps cheaply, so these are recorded the
-first time `jobs` or `logs` happens to observe a job as running or finished — a job
-never checked on while running will show no duration once it's done.
+`running for 5m30s` / `finished in 12m45s` header before the log output. Start times come
+from the container's `docker inspect` and finished durations from task spooler itself, so
+they're exact no matter when you check (older jobs from before container naming fall back
+to the time they were first observed). A running job's elapsed time is measured against the
+host's clock, so clock skew between your machine and the host doesn't distort it (keep the
+host's clock NTP-synced, though — Started/Ended are shown in the host's time).
+
+`jobs --queue` lists every job in the host's task-spooler queue, not just this project's:
+
+| Column | Meaning |
+|--------|---------|
+| `ID` | dockhand job ID in the submitting project — what `logs`/`stop`/`urgent` take there (`-` for jobs submitted before dockhand named its containers) |
+| `Project` | Image the job runs (the project's `imagename`) |
+| `Status` / `Started` / `Duration` | From task spooler (`tsp -l`, `tsp -i`), measured on the host's clock |
+| `TS ID` | Task spooler's own job ID, for use with `tsp` directly |
+
+Running and queued jobs come first (queued in queue order), then the rest newest-started first.
 
 Resubmitting a job that ran in [`bake`](#code-delivery-mount-vs-bake) mode reruns the exact
 image it originally built — recorded per job — rather than rebuilding from current code, so a
