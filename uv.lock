@@ -266,8 +266,8 @@ wheels = [
 ]
 
 [[package]]
-name = "dockhand"
-version = "0.3.0"
+name = "dockhand-cli"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "fabric" },
