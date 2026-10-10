@@ -1,4 +1,4 @@
-# CLAUDE.md — dockhand Development Guide
+# AGENTS.md — dockhand Development Guide
 
 ## Project Overview
 
@@ -42,6 +42,12 @@ uv run ruff format .
 uv run ruff check --fix .
 ```
 
+**Build / release:**
+The PyPI distribution is named `dockhand-cli` (the `dockhand` name is taken); the installed command and import package are still `dockhand`. Version lives in `pyproject.toml`. Publishing a GitHub release triggers `.github/workflows/publish.yml`, which runs `uv build && uv publish` via PyPI trusted publishing (OIDC, no API token). Pushing to `main` alone publishes nothing.
+```bash
+uv build   # local sanity check; artifacts land in dist/
+```
+
 ## Architecture
 
 ### Entry Point
@@ -52,6 +58,7 @@ uv run ruff check --fix .
 - `dockhand run` — queue/run from an already-built image, no sync
 - `dockhand install` — build the image only
 - `dockhand logs`, `stop`, `remove`, `jobs`, `urgent`, `prune` — job/queue lifecycle (`manage.py` + `queue.py`)
+  - `jobs` shows this project's last 30 active jobs; `--all` lifts the cap and includes finished/failed/stopped; `--queue` shows the host's whole task-spooler queue, including other projects' jobs
 - `dockhand history` — show past runs
 - `dockhand volumes`, `download` — inspect and pull files from mounted volumes
 - `dockhand resubmit` — rerun a past job with optional overrides
@@ -76,10 +83,10 @@ Config file: `.dockhand.json` in the project root (must also contain a `.git` �
 ### Key Modules
 - `submit.py` — Builds the `docker run` command (code mount vs. data volumes vs. GPU/port flags), resolves code delivery, and hands off to a transport to start the job.
 - `build.py` — Runs `docker build` on the client (optionally syncing first).
-- `manage.py` — Job lifecycle: `logs`, `stop`, `remove`, `jobs` (`execute_stats`), and `prune` (removes baked images no longer referenced by an active job).
+- `manage.py` — Job lifecycle: `logs`, `stop`, `remove`, `jobs` (`execute_stats`), `jobs --queue` (`execute_queue`), and `prune` (removes baked images no longer referenced by an active job). Also owns job timing (`_observe_job_time`, `_docker_started_at`, `_host_now`).
 - `resubmit.py` — Looks up a history entry and re-invokes `execute_submit` with overrides; pins to the original baked image when applicable.
-- `queue.py` — Task spooler (`tsp`) integration: submit/list/promote/remove/kill, plus `ts -l` output parsing.
-- `transport.py` — Abstracts "how a job runs": `TaskSpoolerTransport` (queue enabled) vs. `DockerTransport` (direct `docker run -d`). Both expose the same interface (`submit`, `list_jobs`, `logs`, `stop`, `remove`) so job-management commands don't care which backend created a job; the transport used is recorded per job in history.
+- `queue.py` — Task spooler (`tsp`) integration: submit/list/promote/remove/kill, `tsp -l` output parsing, max slot count (`ts_max_slots`), and start times from `tsp -i` (`ts_start_times`).
+- `transport.py` — Abstracts "how a job runs": `TaskSpoolerTransport` (queue enabled) vs. `DockerTransport` (direct `docker run -d`). Both expose the same interface (`run_flags`, `submit`, `list_jobs`, `container_name`, `logs`, `stop`, `remove`) so job-management commands don't care which backend created a job; the transport used is recorded per job in history. Containers are named `dockhand-<local_id>` in both modes (queued: `--rm --name`; direct: `-d --name`, no `--rm` so logs survive exit).
 - `tagging.py` — Resolves the image tag/ref for baked code delivery (content-addressed from git commit + dirty-state hash; unique per queued submit, reused for direct runs).
 - `history.py` — Reads/writes `.dockhand_history.json`, reserves/looks up local job IDs.
 - `volumes.py` — Lists the container filesystem as a tree (code mount + data volumes) and resolves a workdir-relative path back to its host path.
@@ -111,28 +118,36 @@ Stores container runs in `.dockhand_history.json` as JSON. Each entry contains:
   "handle": 12,                  // tsp job id, or container name for direct runs
   "ts_job_id": 12,                // task_spooler transport only
   "host": "remote.example.com",   // or "localhost"
-  "started_at": 1234567891.0,     // optional, set the first time `jobs` observes it running
-  "ended_at": 1234567895.0        // optional, set the first time `jobs` observes it finished/failed/stopped
+  "started_at": 1234567891.0,     // optional, set when `jobs`/`logs` first sees it running
+  "ended_at": 1234567895.0,       // optional, set when `jobs`/`logs` first sees it finished/failed/stopped
+  "stopped": true                 // optional, set by `dockhand stop`; shows finished/failed as "stopped"
 }
 ```
 
 Used by `resubmit` (look up a previous run and re-run with overrides, pinning the original baked image when unchanged), `logs`, `stop`, `remove`, `jobs`, `urgent`, `prune` (default to latest if no ID given). Job-management commands dispatch to the transport recorded on the entry (`transport_for_entry`), so `logs`/`stop`/`remove` work the same regardless of whether a job went through the queue or ran directly.
 
-`started_at`/`ended_at` aren't queried from tsp/docker (neither exposes exact start/end timestamps cheaply for both transports) — `jobs` and `logs` each stamp them lazily the first time they happen to observe a job in the running/terminal state, so a job never checked on while running will show no start time once it finishes. `dockhand jobs` displays these as Started/Ended (absolute, `%Y-%m-%d %H:%M:%S`) and Duration (elapsed while running, total once finished) columns; `dockhand logs` prints a one-line "running for Xm" / "finished in Xm" header before the log output.
+`started_at`/`ended_at` are written the first time `jobs` or `logs` observes a job in the running/terminal state (`_observe_job_time`), but the values come from docker/ts, not the observation time:
+- `started_at` — the container's real `docker inspect .State.StartedAt` (found via the `dockhand-<local_id>` name). Falls back to "now" only if the container can't be inspected (pre-naming jobs, already removed).
+- `ended_at` — `started_at + duration_seconds` from ts's own elapsed-time field when available, else "now".
+- Running durations are measured against the host clock (`_host_now` runs `date +%s` on the host) so local/host clock skew doesn't distort them.
+
+`dockhand jobs` shows Started/Ended (absolute, `%Y-%m-%d %H:%M:%S`) and Duration columns, grouped running → queued → finished/failed/stopped, newest ID first within each group. `dockhand logs` prints a one-line "running for Xm" / "finished in Xm" header before the log output.
+
+`dockhand jobs --queue` bypasses history entirely: it prints the raw host-wide `tsp -l` queue (ts is one shared queue per host), with each job's dockhand ID parsed from its `dockhand-<n>` container name, a project column from the image name, start times from `tsp -i`, and a "N running / M slots, K queued" footer.
 
 ### Design Patterns
 
 **DockerDefault factory:**
-In `__init__.py`, `DockerDefault` is a callable factory that pulls defaults from `cli_config.docker` at call time. Enables Typer's `default_factory` to respect active profiles.
+In `__init__.py`, `DockerDefault` is a callable factory that pulls defaults from `cli_config.docker` at call time (after the `--profile` callback has run), for use with Typer's `default_factory`. `SyncDefault` does the same for `cli_config.sync`.
 
 **Transport abstraction:**
-`get_transport()` in `transport.py` picks `TaskSpoolerTransport` or `DockerTransport` based on `cli_config.queue.enabled` at submit time. Every job-management command re-derives the correct transport per-job from the history entry (`transport_for_entry`) rather than from current config, so switching `queue.enabled` doesn't strand in-flight jobs from the other mode.
+`get_transport()` in `transport.py` picks `TaskSpoolerTransport` or `DockerTransport` based on `cli_config.queue.enabled` at submit time. Per-job commands (`logs`, `stop`, `remove`, `urgent`) re-derive the transport from the history entry (`transport_for_entry`; entries without a `transport` field are treated as task spooler), and `logs`/`stop`/`remove` also connect to the entry's recorded `host`. The exception is `jobs`, which lists via the *current* config's transport and host.
 
 **Code delivery resolution:**
 `DockerConfig.resolve_code_delivery(queue_enabled)` picks `mount` or `bake` when `code_delivery` isn't explicitly set: `bake` when the queue is enabled (avoids code drift while a job waits in queue), `mount` otherwise (zero-rebuild iteration). See README's [Code delivery](README.md#code-delivery-mount-vs-bake) section for the full rationale.
 
 **Profile support:**
-`cli_config.load_profile(name)` loads overrides from `.dockhand.json` profiles section (currently merges `history_path`, `remote_path`, `ssh`). All config classes support `validate()` for safe merging.
+`cli_config.load_profile(name)` loads overrides from `.dockhand.json` profiles section. It only merges `history_path`, `remote_path` and `ssh` — `docker`, `queue` and `sync` keys in a profile are silently ignored. `SSHConfig.validate()` is used for safe merging of partial ssh overrides.
 
 **Command structure:**
 Each command:
@@ -155,7 +170,7 @@ Each command:
 | `__init__.py` | CLI app definition, command routing, config defaults |
 | `submit.py` | Builds the `docker run` command, resolves code delivery, submits via transport |
 | `build.py` | `docker build` execution |
-| `manage.py` | `logs`, `stop`, `remove`, `jobs`, `prune` |
+| `manage.py` | `logs`, `stop`, `remove`, `jobs`, `jobs --queue`, `prune`, job timing |
 | `resubmit.py` | Rerun a past job with overrides |
 | `queue.py` | Task spooler (`tsp`) integration |
 | `transport.py` | Task-spooler vs. direct-docker execution backends |
@@ -172,6 +187,7 @@ Each command:
 | `sync.py` | rsync-based code synchronization |
 | `error.py` | Error reporting |
 | `constants.py` | Config/history file names |
+| `.github/workflows/publish.yml` | Publish `dockhand-cli` to PyPI on GitHub release |
 
 ## Configuration Format
 
@@ -207,11 +223,9 @@ Each command:
   },
   "remote_path": "~/my-project",
   "profiles": {
-    "dev": {
-      "docker": {
-        "gpus": "1",
-        "dockerfile": "Dockerfile.dev"
-      }
+    "gpu2": {
+      "ssh": { "hostname": "gpu2.example.com" },
+      "remote_path": "~/my-project-gpu2"
     }
   }
 }
@@ -242,13 +256,14 @@ uv run dockhand run 'bash'                           # Run interactively
 
 **Using profiles:**
 ```bash
-uv run dockhand --profile dev submit 'python train.py'   # Use dev profile
-uv run dockhand --profile prod install                   # Build prod image
+uv run dockhand --profile gpu2 install                    # Build on the gpu2 host
+uv run dockhand --profile gpu2 submit 'python train.py'  # Run there
 ```
 
 **Queue management:**
 ```bash
 uv run dockhand jobs                  # List active jobs
+uv run dockhand jobs --queue          # Whole host queue, all projects, with slot usage
 uv run dockhand urgent 5               # Promote job #5 to front of queue
 uv run dockhand prune --dry-run        # Preview unused baked images before removing
 ```
@@ -269,7 +284,7 @@ uv run ruff format --check .   # Format check
 2. **SSH by default** — Assumes docker host is remote. Auto-detects local by resolving the configured hostname to a loopback address.
 3. **History in JSON** — Simple, human-readable, easily editable.
 4. **Profile support** — Allows per-project config variants.
-5. **Minimal dependencies** — typer, fabric, paramiko, gitpython, rich.
+5. **Minimal dependencies** — typer, fabric, paramiko, gitpython (rich comes in via typer).
 6. **Transport abstraction over queue state** — job-management commands read the transport from each job's own history entry rather than current `queue.enabled`, so toggling the queue mid-flight doesn't orphan existing jobs.
 7. **Code-delivery default follows queue mode** — `bake` when queued (avoids code drift while waiting), `mount` when not (zero-rebuild iteration); explicit `code_delivery` overrides either way.
 
@@ -301,7 +316,7 @@ When working on dockhand:
 2. Maintain `.dockhand.json` compatibility
 3. Test manually with `uv run dockhand <command> --help` and actual docker operations
 4. Follow ruff lint/format rules (use `uv run ruff check . && uv run ruff format .`)
-5. Document new features in README.md and CLAUDE.md
+5. Document new features in README.md and AGENTS.md
 6. Update this file's Architecture section when modules are added, split, or renamed — it has drifted from actual code structure before
 
 ## Maintenance
