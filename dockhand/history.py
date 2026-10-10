@@ -9,6 +9,7 @@ from typing import List
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from dockhand.config import DockerConfig
 from dockhand.constants import HISTORY_FILENAME
@@ -165,6 +166,6 @@ def execute_history(config: DockerConfig):
         imagename = _config["imagename"]
         cmds = _config.get("commands") or _config.get("arguments") or []
         commands_str = " ".join(cmds)
-        table.add_row(local_id, host, timestamp, branch, gpus, volumes, imagename, commands_str)
+        table.add_row(local_id, host, timestamp, branch, gpus, volumes, imagename, Text(commands_str))
 
     Console().print(table)

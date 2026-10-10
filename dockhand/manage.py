@@ -206,7 +206,7 @@ def execute_stats(config: DockerConfig, all: bool = False):
             id_str = str(local_id) if local_id is not None else f"{transport.name}:{job['handle']}"
             user_cmd = _user_command(job["command"], config.imagename)
             table.add_row(
-                id_str, status_text, _format_time(started_at), _format_time(ended_at), duration_str, user_cmd
+                id_str, status_text, _format_time(started_at), _format_time(ended_at), duration_str, Text(user_cmd)
             )
 
         if history_changed:
