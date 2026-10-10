@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "dockhand"
+name = "dockhand-cli"
 version = "0.3.1"
 description = "CLI for managing Docker containers on remote machines"
 readme = "README.md"
@@ -27,6 +27,9 @@ Repository = "https://github.com/NicholasPHansen/dockhand"
 
 [project.scripts]
 dockhand = "dockhand:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dockhand"]
 
 [tool.ruff]
 line-length = 120
