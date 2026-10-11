@@ -54,15 +54,15 @@ def ts_get_job(client: Client, job_id: int, cwd: str) -> dict | None:
     return next((j for j in jobs if j["id"] == job_id), None)
 
 
-def ts_max_slots(client: Client, cwd: str) -> int | None:
-    """Current max slot count configured for the host's task spooler (`tsp -S`)."""
-    returncode, stdout = client.run("tsp -S", cwd=cwd, capture=True)
-    if returncode != 0:
-        return None
-    try:
-        return int(stdout.strip())
-    except ValueError:
-        return None
+_RUN_SLOTS_RE = re.compile(r"\[run=(\d+)/(\d+)\]")
+
+
+def ts_slot_usage(client: Client, cwd: str) -> tuple[int, int] | None:
+    """(slots in use, total slots) for the host's task spooler, from the `[run=N/M]` that
+    `tsp -l` prints in its header line. None if it can't be read."""
+    returncode, stdout = client.run("tsp -l | head -n 1", cwd=cwd, capture=True)
+    match = _RUN_SLOTS_RE.search(stdout) if returncode == 0 else None
+    return (int(match.group(1)), int(match.group(2))) if match else None
 
 
 def extract_docker_command(input_string):

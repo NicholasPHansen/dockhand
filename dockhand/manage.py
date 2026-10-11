@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
@@ -14,7 +15,7 @@ from dockhand.client.base import Client
 from dockhand.config import DockerConfig, cli_config
 from dockhand.error import error_and_exit
 from dockhand.history import get_history_entry, load_history, mark_job_time, mark_stopped, save_history
-from dockhand.queue import ts_list, ts_max_slots, ts_start_times
+from dockhand.queue import ts_list, ts_slot_usage, ts_start_times
 from dockhand.transport import Transport, entry_handle, get_transport, transport_for_entry
 
 _STATE_STYLES = {
@@ -41,6 +42,20 @@ _TERMINAL_STATES = ("finished", "failed", "stopped")
 # Sort rank for `dockhand jobs`: running, then queued, then everything terminal
 # (finished/failed/stopped/skipped) grouped last.
 _JOB_CATEGORY_ORDER = {"running": 0, "queued": 1}
+
+
+def _dockhand_id(container_name: str | None) -> int | None:
+    """dockhand's job ID from its ``dockhand-<id>`` container name. None for jobs that predate
+    container naming (or weren't submitted by dockhand)."""
+    match = re.fullmatch(r"dockhand-(\d+)", container_name or "")
+    return int(match.group(1)) if match else None
+
+
+def _job_sort_key(state: str, job_id: int | None, ended_at: float | None) -> tuple:
+    """Running, then queued, then finished/failed/stopped jobs; highest dockhand ID first within
+    each group, jobs without an ID last. IDs can repeat (a reset history restarts them), so the
+    more recently ended job of a pair comes first."""
+    return (_JOB_CATEGORY_ORDER.get(state, 2), job_id is None, -(job_id or 0), -(ended_at or 0))
 
 
 def _format_duration(seconds: float) -> str:
@@ -129,11 +144,11 @@ def _observe_job_time(
     return changed
 
 
-def execute_stats(config: DockerConfig, all: bool = False):
-    """List live jobs for the active transport (queue or direct docker).
+def execute_stats(config: DockerConfig, limit: int | None = _JOBS_DISPLAY_LIMIT):
+    """List jobs for the active transport (queue or direct docker).
 
-    Defaults to the most recent 30 jobs, newest (highest ID) first. ``--all``
-    lifts the 30-job cap and also includes finished/failed/stopped jobs.
+    Shows the *limit* most recent jobs (all of them when None): running, then queued, then
+    finished/failed/stopped, highest dockhand ID first within each group.
 
     Started is the container's real `docker inspect` start time where available (see
     ``_docker_started_at``); Duration for a finished task-spooler job comes straight from
@@ -146,38 +161,50 @@ def execute_stats(config: DockerConfig, all: bool = False):
     with get_client() as client:
         jobs = transport.list_jobs(client)
 
-        if not all:
-            jobs = [j for j in jobs if j["state"] in ("running", "queued", "finished")]
-
         if not jobs:
-            typer.echo("No active jobs." if not all else "No jobs.")
+            typer.echo("No jobs.")
             return
 
         history = load_history()
-        handle_to_local = {
-            str(entry_handle(e)): e["local_id"] for e in history if entry_handle(e) is not None and "local_id" in e
-        }
-        entry_by_local = {e["local_id"]: e for e in history if "local_id" in e}
+        # Keyed by handle, not local_id: local IDs repeat if the history was ever reset.
+        entry_by_handle = {str(entry_handle(e)): e for e in history if entry_handle(e) is not None and "local_id" in e}
         stopped_locals = {e["local_id"] for e in history if e.get("stopped")}
 
+        # Task spooler knows every job's start time (and duration once finished) on its own,
+        # so jobs this checkout's history doesn't know still get times and sort correctly.
+        ts_started = {}
+        summary = None
+        if transport.name == "task_spooler":
+            ts_started = ts_start_times(
+                client, [j["handle"] for j in jobs if j["state"] != "queued"], cli_config.remote_path
+            )
+            # Before sorting: ts lists queued jobs in the order they will start.
+            summary = _queue_summary(jobs, ts_slot_usage(client, cwd=cli_config.remote_path))
+
+        def _local_id(job: dict) -> int | None:
+            # This checkout's history knows the jobs it submitted; any other job (submitted from
+            # another machine or checkout) still carries its ID in the container name.
+            entry = entry_by_handle.get(str(job["handle"]))
+            return entry["local_id"] if entry is not None else _dockhand_id(job.get("container_name"))
+
         def _effective_state(job: dict) -> str:
-            local_id = handle_to_local.get(str(job["handle"]))
+            local_id = _local_id(job)
             state = job["state"]
             if local_id in stopped_locals and state in ("finished", "failed"):
                 return "stopped"
             return state
 
-        # Group by category (running, then queued, then finished/failed/stopped), newest
-        # job id first within each group — matches how an operator scans the list: what's
-        # active right now, what's next, then history.
-        jobs.sort(
-            key=lambda j: (
-                _JOB_CATEGORY_ORDER.get(_effective_state(j), 2),
-                -handle_to_local.get(str(j["handle"]), -1),
-            )
-        )
-        if not all:
-            jobs = jobs[:_JOBS_DISPLAY_LIMIT]
+        def _ended_at(job: dict) -> float | None:
+            start = ts_started.get(job["handle"])
+            if start is not None and job.get("duration_seconds") is not None:
+                return start + job["duration_seconds"]
+            entry = entry_by_handle.get(str(job["handle"]))
+            return entry.get("ended_at") if entry else None
+
+        # Running, then queued, then history, newest ID first in each — matches how an operator
+        # scans the list: what's active right now, what's next, then what already ran.
+        jobs.sort(key=lambda j: _job_sort_key(_effective_state(j), _local_id(j), _ended_at(j)))
+        jobs = jobs[:limit]
 
         table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
         table.add_column("ID", justify="right", style="bold")
@@ -192,11 +219,11 @@ def execute_stats(config: DockerConfig, all: bool = False):
 
         for job in jobs:
             state = job["state"]
-            local_id = handle_to_local.get(str(job["handle"]))
+            local_id = _local_id(job)
             if local_id in stopped_locals and state in ("finished", "failed"):
                 state = "stopped"
 
-            entry = entry_by_local.get(local_id)
+            entry = entry_by_handle.get(str(job["handle"]))
             duration_seconds = job.get("duration_seconds")
             if entry is not None:
                 job_transport = transport_for_entry(entry)
@@ -205,8 +232,8 @@ def execute_stats(config: DockerConfig, all: bool = False):
                 ):
                     history_changed = True
 
-            started_at = entry.get("started_at") if entry else None
-            ended_at = entry.get("ended_at") if entry else None
+            started_at = entry.get("started_at") if entry else ts_started.get(job["handle"])
+            ended_at = entry.get("ended_at") if entry else _ended_at(job)
             if duration_seconds is not None:
                 duration_str = _format_duration(duration_seconds)
             elif started_at is not None:
@@ -216,7 +243,7 @@ def execute_stats(config: DockerConfig, all: bool = False):
 
             style = _STATE_STYLES.get(state, "")
             status_text = Text(state, style=style)
-            id_str = str(local_id) if local_id is not None else f"{transport.name}:{job['handle']}"
+            id_str = str(local_id) if local_id is not None else "-"
             user_cmd = _user_command(job["command"], config.imagename)
             table.add_row(
                 id_str, status_text, _format_time(started_at), _format_time(ended_at), duration_str, Text(user_cmd)
@@ -225,19 +252,22 @@ def execute_stats(config: DockerConfig, all: bool = False):
         if history_changed:
             save_history(history)
 
+    if summary is not None:
+        Console().print(summary)
     Console().print(table)
 
 
-def execute_queue(config: DockerConfig):
+def execute_queue(config: DockerConfig, limit: int | None = _JOBS_DISPLAY_LIMIT):
     """Show the host's whole task-spooler queue, including other projects' jobs.
 
     Task spooler runs one shared queue per host, so jobs submitted by other projects
     on the same host already sit in the same `tsp -l` output — this prints it directly
     instead of going through this project's history, which only know about its own jobs.
+    Shows the *limit* most recent jobs (all of them when None).
     """
     with get_client() as client:
         jobs = ts_list(client, cwd=cli_config.remote_path)
-        max_slots = ts_max_slots(client, cwd=cli_config.remote_path)
+        slots = ts_slot_usage(client, cwd=cli_config.remote_path)
         if jobs:
             started = ts_start_times(client, [j["id"] for j in jobs if j["state"] != "queued"], cli_config.remote_path)
             now = _host_now(client)
@@ -246,15 +276,15 @@ def execute_queue(config: DockerConfig):
         typer.echo("Task spooler queue is empty.")
         return
 
-    # Same grouping as `dockhand jobs`: running, then queued (in ts's queue order), then the
-    # rest newest-started first. ts IDs aren't chronological (they restart with the server).
-    # The sort is stable, so running/queued jobs keep ts's order.
-    jobs.sort(
-        key=lambda j: (
-            _JOB_CATEGORY_ORDER.get(j["state"], 2),
-            0 if j["state"] in _JOB_CATEGORY_ORDER else -started.get(j["id"], 0),
-        )
-    )
+    # Before sorting: ts lists queued jobs in the order they will start.
+    Console().print(_queue_summary(jobs, slots))
+
+    def _ended_at(job: dict) -> float | None:
+        start, duration = started.get(job["id"]), job.get("duration_seconds")
+        return start + duration if start is not None and duration is not None else None
+
+    # Same order as `dockhand jobs`.
+    jobs.sort(key=lambda j: _job_sort_key(j["state"], _dockhand_id(j.get("container_name")), _ended_at(j)))
 
     table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
     table.add_column("ID", justify="right", style="bold")
@@ -265,7 +295,7 @@ def execute_queue(config: DockerConfig):
     table.add_column("Command")
     table.add_column("TS ID", justify="right", style="dim")
 
-    for job in jobs:
+    for job in jobs[:limit]:
         state = job["state"]
         start = started.get(job["id"])
         if job.get("duration_seconds") is not None:
@@ -275,11 +305,10 @@ def execute_queue(config: DockerConfig):
         else:
             duration = "-"
         # dockhand's own job number, as used by `logs`/`stop`/`urgent` in the submitting project.
-        # Jobs that predate container naming (or weren't submitted by dockhand) have none.
-        name_match = re.fullmatch(r"dockhand-(\d+)", job.get("container_name") or "")
+        job_id = _dockhand_id(job.get("container_name"))
         project = (job.get("image") or "-").split(":", 1)[0]
         table.add_row(
-            name_match.group(1) if name_match else "-",
+            str(job_id) if job_id is not None else "-",
             project,
             Text(state, style=_STATE_STYLES.get(state, "")),
             _format_time(start),
@@ -290,10 +319,45 @@ def execute_queue(config: DockerConfig):
 
     Console().print(table)
 
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def _queue_summary(jobs: list[dict], slots: tuple[int, int] | None) -> Panel:
+    """Header panel for `jobs`: running jobs with a slot-usage bar, and the queue with the job
+    that starts next. *jobs* (raw `ts_list` dicts, or the task-spooler transport's, which call
+    the ts ID ``handle``) must still be in ts's own (queue) order."""
     running = sum(1 for j in jobs if j["state"] == "running")
-    queued = sum(1 for j in jobs if j["state"] == "queued")
-    slots_str = f"{running} running / {max_slots} slots" if max_slots is not None else f"{running} running"
-    typer.echo(f"\n{slots_str}, {queued} queued.")
+    queued = [j for j in jobs if j["state"] == "queued"]
+
+    usage = Text()
+    if slots is not None:
+        used, total = slots
+        width = min(total, 24)
+        filled = round(width * used / total) if total else 0
+        usage.append("█" * filled, style="green").append("░" * (width - filled), style="grey35")
+        usage.append(f"  {used}/{total} slots in use", style="bold" if used >= total else "")
+
+    up_next = Text()
+    if queued:
+        nxt = queued[0]
+        nxt_id = _dockhand_id(nxt.get("container_name"))
+        project = (nxt.get("image") or "-").split(":", 1)[0]
+        ts_id = nxt.get("id", nxt.get("handle"))
+        up_next.append("next: ", style="dim").append(f"#{nxt_id}" if nxt_id is not None else f"ts {ts_id}")
+        up_next.append(f"  {project}", style="dim")
+
+    grid = Table.grid(padding=(0, 3))
+    grid.add_column(style="bold")
+    grid.add_column()
+    grid.add_column()
+    grid.add_row("Running", Text(_plural(running, "job"), style="bold green" if running else "dim"), usage)
+    grid.add_row("Queued", Text(_plural(len(queued), "job"), style="bold yellow" if queued else "dim"), up_next)
+
+    host = cli_config.ssh.hostname if cli_config.ssh else "localhost"
+    title = f"[bold]{host}[/bold] · task queue"
+    return Panel(grid, title=title, title_align="left", border_style="grey50", expand=False)
 
 
 def _resolve_entry(job_id: int | None) -> tuple[int, dict]:

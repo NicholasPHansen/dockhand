@@ -141,10 +141,11 @@ dockhand install -v
 # Build a specific Dockerfile
 dockhand install --dockerfile Dockerfile.prod
 
-# Check active jobs
+# Show the last 30 jobs (running, then queued, then finished; highest ID first)
 dockhand jobs
 
-# Check all jobs including finished
+# Show the last 10 jobs, or every job
+dockhand jobs -n 10
 dockhand jobs --all
 
 # Show the host's whole task-spooler queue, including other projects' jobs
@@ -191,7 +192,9 @@ to the time they were first observed). A running job's elapsed time is measured 
 host's clock, so clock skew between your machine and the host doesn't distort it (keep the
 host's clock NTP-synced, though — Started/Ended are shown in the host's time).
 
-`jobs --queue` lists every job in the host's task-spooler queue, not just this project's:
+`jobs --queue` lists every job in the host's task-spooler queue, not just this project's,
+under a summary panel showing running jobs with a slot-usage bar (from `tsp -l`'s `[run=N/M]`)
+and the number of queued jobs with the one that starts next:
 
 | Column | Meaning |
 |--------|---------|
@@ -200,7 +203,11 @@ host's clock NTP-synced, though — Started/Ended are shown in the host's time).
 | `Status` / `Started` / `Duration` | From task spooler (`tsp -l`, `tsp -i`), measured on the host's clock |
 | `TS ID` | Task spooler's own job ID, for use with `tsp` directly |
 
-Running and queued jobs come first (queued in queue order), then the rest newest-started first.
+Both views list running jobs, then queued, then finished/failed/stopped, highest dockhand ID
+first within each group (jobs without an ID last), and take the same `-n N` / `--all` limits.
+With the queue enabled, both also start with the summary panel.
+`jobs` reads each job's ID from its `dockhand-<id>` container name when the local history
+doesn't know it — e.g. a job submitted from another machine or checkout.
 
 Resubmitting a job that ran in [`bake`](#code-delivery-mount-vs-bake) mode reruns the exact
 image it originally built — recorded per job — rather than rebuilding from current code, so a

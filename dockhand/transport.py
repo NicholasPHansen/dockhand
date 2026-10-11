@@ -97,6 +97,8 @@ class TaskSpoolerTransport(Transport):
                 "state": j["state"],
                 "command": j["command"],
                 "duration_seconds": j.get("duration_seconds"),
+                "container_name": j.get("container_name"),
+                "image": j.get("image"),
             }
             for j in jobs
         ]
@@ -177,7 +179,14 @@ class DockerTransport(Transport):
                 continue
             name, state = parts[0], parts[1]
             command = parts[2].strip('"') if len(parts) > 2 else ""
-            jobs.append({"handle": name, "state": _DOCKER_STATE_MAP.get(state, state), "command": command})
+            jobs.append(
+                {
+                    "handle": name,
+                    "state": _DOCKER_STATE_MAP.get(state, state),
+                    "command": command,
+                    "container_name": name,
+                }
+            )
         return jobs
 
     def container_name(self, entry):
