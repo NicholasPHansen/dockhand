@@ -23,7 +23,7 @@ from dockhand.submit import execute_submit
 from dockhand.tunnel import execute_tunnel
 from dockhand.volumes import execute_volumes
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 cli = typer.Typer(pretty_exceptions_show_locals=False)
 
