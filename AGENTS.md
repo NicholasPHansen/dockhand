@@ -58,7 +58,7 @@ uv build   # local sanity check; artifacts land in dist/
 - `dockhand run` — queue/run from an already-built image, no sync
 - `dockhand install` — build the image only
 - `dockhand logs`, `stop`, `remove`, `jobs`, `urgent`, `prune` — job/queue lifecycle (`manage.py` + `queue.py`)
-  - `jobs` shows this project's last 30 active jobs; `--all` lifts the cap and includes finished/failed/stopped; `--queue` shows the host's whole task-spooler queue, including other projects' jobs
+  - `jobs` shows the last 30 jobs (`-n N` for N, `--all` for all). With the queue enabled that's the host's whole task-spooler queue, every project's jobs with a Project column; with it disabled, this project's own `docker run` containers
 - `dockhand history` — show past runs
 - `dockhand volumes`, `download` — inspect and pull files from mounted volumes
 - `dockhand resubmit` — rerun a past job with optional overrides
@@ -83,7 +83,7 @@ Config file: `.dockhand.json` in the project root (must also contain a `.git` �
 ### Key Modules
 - `submit.py` — Builds the `docker run` command (code mount vs. data volumes vs. GPU/port flags), resolves code delivery, and hands off to a transport to start the job.
 - `build.py` — Runs `docker build` on the client (optionally syncing first).
-- `manage.py` — Job lifecycle: `logs`, `stop`, `remove`, `jobs` (`execute_stats`), `jobs --queue` (`execute_queue`), and `prune` (removes baked images no longer referenced by an active job). Also owns job timing (`_observe_job_time`, `_docker_started_at`, `_host_now`).
+- `manage.py` — Job lifecycle: `logs`, `stop`, `remove`, `jobs` (`execute_queue` with the queue enabled, `execute_stats` without), and `prune` (removes baked images no longer referenced by an active job). Also owns job timing (`_observe_job_time`, `_docker_started_at`, `_host_now`).
 - `resubmit.py` — Looks up a history entry and re-invokes `execute_submit` with overrides; pins to the original baked image when applicable.
 - `queue.py` — Task spooler (`tsp`) integration: submit/list/promote/remove/kill, `tsp -l` output parsing, max slot count (`ts_max_slots`), and start times from `tsp -i` (`ts_start_times`).
 - `transport.py` — Abstracts "how a job runs": `TaskSpoolerTransport` (queue enabled) vs. `DockerTransport` (direct `docker run -d`). Both expose the same interface (`run_flags`, `submit`, `list_jobs`, `container_name`, `logs`, `stop`, `remove`) so job-management commands don't care which backend created a job; the transport used is recorded per job in history. Containers are named `dockhand-<local_id>` in both modes (queued: `--rm --name`; direct: `-d --name`, no `--rm` so logs survive exit).
@@ -133,7 +133,7 @@ Used by `resubmit` (look up a previous run and re-run with overrides, pinning th
 
 `dockhand jobs` shows Started/Ended (absolute, `%Y-%m-%d %H:%M:%S`) and Duration columns, grouped running → queued → finished/failed/stopped, newest ID first within each group. `dockhand logs` prints a one-line "running for Xm" / "finished in Xm" header before the log output.
 
-`dockhand jobs --queue` bypasses history entirely: it prints the raw host-wide `tsp -l` queue (ts is one shared queue per host), with each job's dockhand ID parsed from its `dockhand-<n>` container name, a project column from the image name, start times from `tsp -i`, and a "N running / M slots, K queued" footer.
+With the queue enabled, `dockhand jobs` (`execute_queue`) works almost entirely from task spooler rather than history: it prints the raw host-wide `tsp -l` queue (ts is one shared queue per host), with each job's dockhand ID parsed from its `dockhand-<n>` container name, a Project column from the image name (this project's highlighted), start times and reserved slots from `tsp -i` (`ts_job_info`), and a summary panel on top: running jobs with a slot-usage bar from `tsp -l`'s `[run=N/M]` header (`ts_slot_usage`), and queued jobs with the one that starts next. History is only consulted to mark this project's stopped jobs. Without the queue, `execute_stats` lists this project's `docker run` containers, filtered by history handle or image name.
 
 ### Design Patterns
 
@@ -170,7 +170,7 @@ Each command:
 | `__init__.py` | CLI app definition, command routing, config defaults |
 | `submit.py` | Builds the `docker run` command, resolves code delivery, submits via transport |
 | `build.py` | `docker build` execution |
-| `manage.py` | `logs`, `stop`, `remove`, `jobs`, `jobs --queue`, `prune`, job timing |
+| `manage.py` | `logs`, `stop`, `remove`, `jobs`, `prune`, job timing |
 | `resubmit.py` | Rerun a past job with overrides |
 | `queue.py` | Task spooler (`tsp`) integration |
 | `transport.py` | Task-spooler vs. direct-docker execution backends |
@@ -262,8 +262,8 @@ uv run dockhand --profile gpu2 submit 'python train.py'  # Run there
 
 **Queue management:**
 ```bash
-uv run dockhand jobs                  # List active jobs
-uv run dockhand jobs --queue          # Whole host queue, all projects, with slot usage
+uv run dockhand jobs                  # Last 30 jobs; with the queue on, the whole host queue (all projects, slot usage)
+uv run dockhand jobs -n 10            # Last 10 jobs (--all for every job)
 uv run dockhand urgent 5               # Promote job #5 to front of queue
 uv run dockhand prune --dry-run        # Preview unused baked images before removing
 ```

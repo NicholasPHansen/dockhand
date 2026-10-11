@@ -97,8 +97,6 @@ class TaskSpoolerTransport(Transport):
                 "state": j["state"],
                 "command": j["command"],
                 "duration_seconds": j.get("duration_seconds"),
-                "container_name": j.get("container_name"),
-                "image": j.get("image"),
             }
             for j in jobs
         ]
@@ -164,7 +162,7 @@ class DockerTransport(Transport):
         return {"transport": self.name, "handle": _container_name(local_id)}
 
     def list_jobs(self, client):
-        fmt = "{{.Names}}\t{{.State}}\t{{.Command}}"
+        fmt = "{{.Names}}\t{{.State}}\t{{.Image}}\t{{.Command}}"
         returncode, stdout = client.run(
             f"docker ps -a --filter name=dockhand- --format '{fmt}'", cwd=cli_config.remote_path, capture=True
         )
@@ -178,13 +176,15 @@ class DockerTransport(Transport):
             if len(parts) < 2:
                 continue
             name, state = parts[0], parts[1]
-            command = parts[2].strip('"') if len(parts) > 2 else ""
+            image = parts[2] if len(parts) > 2 else None
+            command = parts[3].strip('"') if len(parts) > 3 else ""
             jobs.append(
                 {
                     "handle": name,
                     "state": _DOCKER_STATE_MAP.get(state, state),
                     "command": command,
                     "container_name": name,
+                    "image": image,
                 }
             )
         return jobs

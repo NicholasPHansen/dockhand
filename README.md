@@ -91,7 +91,7 @@ All commands work with the same `.dockhand.json` configuration file. See [Config
 | `submit` | Build the image and queue a container run |
 | `run` | Queue a container run from an already-built image |
 | `install` | Build the Docker image without running it |
-| `jobs` | List active (running/queued) jobs, with start/end/duration — use `--all` for finished jobs too, or `--queue` for the host's whole task-spooler queue across all projects |
+| `jobs` | List the last 30 jobs (`-n N` for N, `--all` for every job) with start/end/duration and slots — with the queue enabled, the host's whole task-spooler queue across all projects |
 | `logs` | Show logs from a job, preceded by a running/finished duration line — use `--follow`/`-f` to stream live |
 | `stop` | Stop a **running** job |
 | `remove` | Remove a **queued** job before it starts |
@@ -141,15 +141,12 @@ dockhand install -v
 # Build a specific Dockerfile
 dockhand install --dockerfile Dockerfile.prod
 
-# Show the last 30 jobs (running, then queued, then finished; highest ID first)
+# Show the last 30 jobs across all projects on the host (running, then queued, then finished)
 dockhand jobs
 
 # Show the last 10 jobs, or every job
 dockhand jobs -n 10
 dockhand jobs --all
-
-# Show the host's whole task-spooler queue, including other projects' jobs
-dockhand jobs --queue
 
 # Stream logs from the last job
 dockhand logs --follow
@@ -192,22 +189,26 @@ to the time they were first observed). A running job's elapsed time is measured 
 host's clock, so clock skew between your machine and the host doesn't distort it (keep the
 host's clock NTP-synced, though — Started/Ended are shown in the host's time).
 
-`jobs --queue` lists every job in the host's task-spooler queue, not just this project's,
-under a summary panel showing running jobs with a slot-usage bar (from `tsp -l`'s `[run=N/M]`)
-and the number of queued jobs with the one that starts next:
+With the queue enabled, `jobs` lists every job in the host's task-spooler queue — every
+project's, not just this one's — so it's clear what a queued job is waiting for. Above the
+table, a summary panel shows running jobs with a slot-usage bar (from `tsp -l`'s `[run=N/M]`)
+and the number of queued jobs with the one that starts next and how many slots it needs
+versus how many are free:
 
 | Column | Meaning |
 |--------|---------|
 | `ID` | dockhand job ID in the submitting project — what `logs`/`stop`/`urgent` take there (`-` for jobs submitted before dockhand named its containers) |
-| `Project` | Image the job runs (the project's `imagename`) |
-| `Status` / `Started` / `Duration` | From task spooler (`tsp -l`, `tsp -i`), measured on the host's clock |
+| `Project` | Image the job runs (the project's `imagename`); this project's jobs are highlighted |
+| `Status` / `Started` / `Ended` / `Duration` | From task spooler (`tsp -l`, `tsp -i`), measured on the host's clock; `stopped` for jobs this project stopped |
+| `Slots` | Slots the job reserved with `--slots` (`tsp -i`'s "Slots required"): held while running, waited for while queued |
 | `TS ID` | Task spooler's own job ID, for use with `tsp` directly |
 
-Both views list running jobs, then queued, then finished/failed/stopped, highest dockhand ID
-first within each group (jobs without an ID last), and take the same `-n N` / `--all` limits.
-With the queue enabled, both also start with the summary panel.
-`jobs` reads each job's ID from its `dockhand-<id>` container name when the local history
-doesn't know it — e.g. a job submitted from another machine or checkout.
+Jobs are listed running, then queued, then finished/failed/stopped, highest dockhand ID first
+within each group (jobs without an ID last). Everything comes from task spooler itself, so the
+view is the same from any machine or checkout.
+
+With the queue disabled, `jobs` lists this project's own `docker run` containers instead
+(there is no shared queue to show), in the same order.
 
 Resubmitting a job that ran in [`bake`](#code-delivery-mount-vs-bake) mode reruns the exact
 image it originally built — recorded per job — rather than rebuilding from current code, so a

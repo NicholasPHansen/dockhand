@@ -146,17 +146,15 @@ def stop(
 def jobs(
     all: Annotated[bool, typer.Option("--all", help="Show every job (no limit).")] = False,
     n: Annotated[int, typer.Option("-n", min=1, help="Number of most recent jobs to show.")] = 30,
-    queue: Annotated[
-        bool,
-        typer.Option(
-            "--queue", help="Show the host's whole task-spooler queue, including other projects' jobs."
-        ),
-    ] = False,
 ):
-    """List jobs, newest first (defaults to the last 30)."""
+    """List jobs, newest first (defaults to the last 30).
+
+    With the queue enabled this is the host's whole task-spooler queue: every project's jobs,
+    with the project each was submitted from.
+    """
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
     limit = None if all else n
-    if queue:
+    if cli_config.queue.enabled:
         execute_queue(cli_config.docker, limit=limit)
         return
     execute_stats(cli_config.docker, limit=limit)

@@ -140,17 +140,19 @@ def _parse_ts_list(output: str) -> list[dict]:
     return jobs
 
 
-def ts_start_times(client: Client, job_ids: list[int], cwd: str) -> dict[int, float]:
-    """Start time (epoch seconds) of each started job, from `tsp -i`, in one round trip.
+def ts_job_info(client: Client, job_ids: list[int], cwd: str) -> dict[int, dict]:
+    """Per-job details that only `tsp -i` has, for every job in one round trip:
+    ``{"slots": N, "started": epoch_seconds}``.
 
-    `tsp -l` has no start time; `tsp -i` prints one per job in the host's local time
-    ("Start time: Sat Oct 10 07:18:53 2026"), so the host's UTC offset is fetched alongside
-    to convert it. Queued jobs have no start time and are simply absent from the result.
+    ``slots`` is what the job reserved (`tsp -N`, "Slots required: 16"). ``started`` is only
+    present once a job has started: `tsp -i` prints it in the host's local time ("Start time:
+    Sat Oct 10 07:18:53 2026"), so the host's UTC offset is fetched alongside to convert it.
     """
     if not job_ids:
         return {}
-    loop = "; ".join(f"echo @@{i}; tsp -i {i} | grep '^Start time:'" for i in job_ids)
-    returncode, stdout = client.run(f"date +%z; {loop}", cwd=cwd, capture=True)
+    loop = "; ".join(f"echo @@{i}; tsp -i {i} | grep -E '^(Start time|Slots required):'" for i in job_ids)
+    # `; true`: grep's exit status for the last job would otherwise become the command's.
+    returncode, stdout = client.run(f"date +%z; {loop}; true", cwd=cwd, capture=True)
     lines = stdout.strip().split("\n")
     if returncode != 0 or not lines:
         return {}
@@ -159,16 +161,25 @@ def ts_start_times(client: Client, job_ids: list[int], cwd: str) -> dict[int, fl
     except ValueError:
         return {}
 
-    starts = {}
+    info: dict[int, dict] = {}
     current = None
     for line in lines[1:]:
         if line.startswith("@@"):
             current = int(line[2:])
-        elif line.startswith("Start time:") and current is not None:
+            info[current] = {}
+        elif current is None:
+            continue
+        elif line.startswith("Slots required:"):
+            try:
+                info[current]["slots"] = int(line.removeprefix("Slots required:"))
+            except ValueError:
+                pass
+        elif line.startswith("Start time:"):
             # ctime pads single-digit days ("Sep  7"); collapse whitespace before parsing.
             text = " ".join(line.removeprefix("Start time:").split())
             try:
-                starts[current] = datetime.strptime(text, "%a %b %d %H:%M:%S %Y").replace(tzinfo=host_tz).timestamp()
+                started = datetime.strptime(text, "%a %b %d %H:%M:%S %Y").replace(tzinfo=host_tz)
+                info[current]["started"] = started.timestamp()
             except ValueError:
                 pass
-    return starts
+    return info
