@@ -103,7 +103,11 @@ All commands work with the same `.dockhand.json` configuration file. See [Config
 | `resubmit` | Resubmit a previous job with optional overrides |
 | `tunnel` | Forward container ports to localhost via SSH tunnel |
 
-All commands that accept a job ID default to the most recent job if no ID is given.
+All commands that accept a job ID default to the most recent job if no ID is given. With the
+queue enabled, a job's ID is task spooler's own job ID — unique across every project sharing
+the host, so the IDs in `jobs` are exactly what `logs`/`stop`/`urgent` take. Without the queue,
+jobs get per-project IDs (1, 2, 3, …). Asking for another project's queued job tells you which
+project it belongs to.
 
 ### Typical workflow
 
@@ -197,14 +201,13 @@ versus how many are free:
 
 | Column | Meaning |
 |--------|---------|
-| `ID` | dockhand job ID in the submitting project — what `logs`/`stop`/`urgent` take there (`-` for jobs submitted before dockhand named its containers) |
+| `ID` | Task spooler's job ID — what `logs`/`stop`/`urgent` take in the submitting project, and what `tsp` takes directly |
 | `Project` | Image the job runs (the project's `imagename`); this project's jobs are highlighted |
 | `Status` / `Started` / `Ended` / `Duration` | From task spooler (`tsp -l`, `tsp -i`), measured on the host's clock; `stopped` for jobs this project stopped |
 | `Slots` | Slots the job reserved with `--slots` (`tsp -i`'s "Slots required"): held while running, waited for while queued |
-| `TS ID` | Task spooler's own job ID, for use with `tsp` directly |
 
-Jobs are listed running, then queued, then finished/failed/stopped, highest dockhand ID first
-within each group (jobs without an ID last). Everything comes from task spooler itself, so the
+Jobs are listed running, then queued, then finished/failed/stopped, highest ID first within
+each group. Everything comes from task spooler itself, so the
 view is the same from any machine or checkout.
 
 With the queue disabled, `jobs` lists this project's own `docker run` containers instead
@@ -346,7 +349,7 @@ Hostname detection:
 
 When `enabled` is **true**, jobs are queued with `tsp` and run in submission order. When
 **false**, there is no queue — each submit starts immediately as a detached container
-(`docker run -d --name dockhand-<id>`). `logs`, `stop`, `jobs`, and `remove` work the same
+(`docker run -d --name dockhand-<project>-<hash>`). `logs`, `stop`, `jobs`, and `remove` work the same
 in both modes; they transparently use `tsp` or `docker` per the job's recorded transport.
 `--slots` and `--urgent` are queue-only and are ignored (with a warning) when the queue is off.
 
@@ -475,7 +478,7 @@ dockhand --profile prod submit 'python train.py'
 1. **Build** (`install`): Optionally syncs local code via rsync, then runs `docker build` on the host. Pass `-v` to stream build output; default shows a spinner only. Only needed when dependencies or the Dockerfile change.
 2. **Submit** (`submit`/`run`): Optionally syncs code to the remote, then starts a `docker run`. With the queue enabled it's submitted to task spooler (`tsp`); with the queue disabled it runs immediately as a detached container. How code reaches the container depends on [`code_delivery`](#code-delivery-mount-vs-bake): in `mount` mode the project directory is bind-mounted at `containerworkdir` (no rebuild; `preserve_paths` protects image-built artifacts like a `.venv` from being shadowed by the mount); in `bake` mode the code is built into an image — content-addressed and immutable for queued jobs — and run with no code mount.
 3. **Queue** (when enabled): tsp runs jobs one at a time in submission order. Jobs with `--slots N` only start when N free slots are available. With the queue disabled, jobs start on submit and this ordering doesn't apply.
-4. **Job IDs**: Each submission gets a local job ID (stable, auto-incrementing) stored alongside the host and the transport handle (tsp job number, or container name). The local ID is what all commands accept.
+4. **Job IDs**: Queued jobs are addressed by their tsp job number, which is unique across every project on the host; direct runs by a local, auto-incrementing ID. ts restarts its numbering when its server restarts, so a repeated ID resolves to the newest job with it. Each job's container is named `dockhand-<project>-<hash>` (also its `tsp -L` label, shown in `tsp -l`), so two projects' jobs never collide on a container name.
 5. **Logs** (`logs`): Reads from the tsp output file (queued jobs) or via `docker logs` (direct runs). Use `--follow`/`-f` to stream a running job live, `--n N` for the last N lines.
 6. **Port Forwarding** (`tunnel`): Establishes SSH local port forwards for container ports.
 7. **Download**: Maps containerworkdir-relative paths to host paths and uses rsync to fetch files.

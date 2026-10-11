@@ -8,7 +8,15 @@ from dockhand.config import DockerResubmitConfig, cli_config
 from dockhand.constants import CONFIG_FILENAME
 from dockhand.download import execute_download
 from dockhand.history import execute_history
-from dockhand.manage import execute_logs, execute_prune, execute_queue, execute_remove, execute_stats, execute_stop
+from dockhand.manage import (
+    execute_logs,
+    execute_prune,
+    execute_queue,
+    execute_remove,
+    execute_stats,
+    execute_stop,
+    missing_job_message,
+)
 from dockhand.queue import ts_make_urgent
 from dockhand.resubmit import execute_resubmit
 from dockhand.submit import execute_submit
@@ -169,7 +177,7 @@ def urgent(
 ):
     """Promote a queued job to the front of the queue."""
     cli_config.check_docker(msg=f"docker requires a Docker configuration in '{CONFIG_FILENAME}'")
-    from dockhand.history import get_history_entry, load_history
+    from dockhand.history import get_history_entry, job_id, load_history
     from dockhand.transport import entry_handle, transport_for_entry
 
     if id is None:
@@ -181,19 +189,19 @@ def urgent(
     else:
         entry = get_history_entry(int(id))
         if entry is None:
-            typer.echo(f"Job #{id} not found in history.")
+            typer.echo(missing_job_message(int(id)))
             raise typer.Exit(1)
 
-    local_id = entry["local_id"]
+    shown_id = job_id(entry)
     if transport_for_entry(entry).name != "task_spooler":
-        typer.echo(f"Job #{local_id} was not queued — 'urgent' only applies to queued jobs.")
+        typer.echo(f"Job #{shown_id} was not queued — 'urgent' only applies to queued jobs.")
         raise typer.Exit(1)
 
     with get_client() as client:
         if ts_make_urgent(client, entry_handle(entry), cwd=cli_config.remote_path):
-            typer.echo(f"Job #{local_id} moved to front of queue.")
+            typer.echo(f"Job #{shown_id} moved to front of queue.")
         else:
-            typer.echo(f"Failed to promote job #{local_id}. It may have already started or finished.")
+            typer.echo(f"Failed to promote job #{shown_id}. It may have already started or finished.")
             raise typer.Exit(1)
 
 

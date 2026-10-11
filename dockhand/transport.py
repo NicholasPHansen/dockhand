@@ -9,6 +9,8 @@ Both backends expose the same interface so ``submit`` and the management command
 (``logs``/``stop``/``jobs``/``remove``) don't care which is active. A job's transport
 is recorded in history, so per-job commands dispatch to the backend that created it.
 """
+import re
+import secrets
 from abc import ABC, abstractmethod
 
 import typer
@@ -19,7 +21,21 @@ from dockhand.error import error_and_exit
 from dockhand.queue import ts_get_job, ts_kill, ts_list, ts_make_urgent, ts_remove, ts_submit
 
 
-def _container_name(local_id: int) -> str:
+def new_container_name() -> str:
+    """A fresh ``dockhand-<project>-<hash>`` container name for a new job.
+
+    Unique across projects sharing a host (two projects' jobs can't collide on a name the way
+    per-project job numbers did), and known before submission, unlike task spooler's job ID.
+    Queued jobs also carry it as their `tsp -L` label.
+    """
+    # Project = the image name without registry path or tag, reduced to docker's name charset.
+    project = cli_config.docker.imagename.rsplit("/", 1)[-1].split(":", 1)[0]
+    project = re.sub(r"[^a-zA-Z0-9_.-]", "-", project)
+    return f"dockhand-{project}-{secrets.token_hex(4)}"
+
+
+def _legacy_container_name(local_id: int) -> str:
+    """Container name of jobs submitted before ``new_container_name`` (dockhand < 0.6.0)."""
     return f"dockhand-{local_id}"
 
 
@@ -46,11 +62,11 @@ class Transport(ABC):
     name: str
 
     @abstractmethod
-    def run_flags(self, local_id: int) -> list[str]:
+    def run_flags(self, name: str) -> list[str]:
         """Flags injected right after ``docker run`` (e.g. ``--rm`` or ``-d --name``)."""
 
     @abstractmethod
-    def submit(self, client: Client, docker_cmd: str, *, local_id: int, slots: int, urgent: bool) -> dict:
+    def submit(self, client: Client, docker_cmd: str, *, name: str, slots: int, urgent: bool) -> dict:
         """Start the job. Returns a handle dict merged into the history entry."""
 
     @abstractmethod
@@ -78,16 +94,16 @@ class Transport(ABC):
 class TaskSpoolerTransport(Transport):
     name = "task_spooler"
 
-    def run_flags(self, local_id: int) -> list[str]:
+    def run_flags(self, name: str) -> list[str]:
         # Named (as well as --rm) so a running job's container can still be inspected for
         # its exact start time — ts itself doesn't expose one.
-        return ["--rm", "--name", _container_name(local_id)]
+        return ["--rm", "--name", name]
 
-    def submit(self, client, docker_cmd, *, local_id, slots, urgent):
-        job_id = ts_submit(client, docker_cmd, cwd=cli_config.remote_path, slots=slots)
+    def submit(self, client, docker_cmd, *, name, slots, urgent):
+        job_id = ts_submit(client, docker_cmd, cwd=cli_config.remote_path, slots=slots, label=name)
         if urgent:
             ts_make_urgent(client, job_id, cwd=cli_config.remote_path)
-        return {"transport": self.name, "handle": job_id, "ts_job_id": job_id}
+        return {"transport": self.name, "handle": job_id, "ts_job_id": job_id, "container": name}
 
     def list_jobs(self, client):
         jobs = ts_list(client, cwd=cli_config.remote_path)
@@ -102,9 +118,11 @@ class TaskSpoolerTransport(Transport):
         ]
 
     def container_name(self, entry):
+        if "container" in entry:
+            return entry["container"]
         local_id = entry.get("local_id")
         # Only jobs submitted after this transport started naming containers have one.
-        return _container_name(local_id) if local_id is not None else None
+        return _legacy_container_name(local_id) if local_id is not None else None
 
     def logs(self, client, entry, *, n, follow):
         job_id = entry_handle(entry)
@@ -149,17 +167,17 @@ _DOCKER_STATE_MAP = {
 class DockerTransport(Transport):
     name = "docker"
 
-    def run_flags(self, local_id: int) -> list[str]:
+    def run_flags(self, name: str) -> list[str]:
         # Detached, named, and NOT --rm so logs survive after the container exits.
-        return ["-d", "--name", _container_name(local_id)]
+        return ["-d", "--name", name]
 
-    def submit(self, client, docker_cmd, *, local_id, slots, urgent):
+    def submit(self, client, docker_cmd, *, name, slots, urgent):
         if urgent:
             typer.echo("Warning: --urgent has no effect without a queue.", err=True)
         returncode, _ = client.run(docker_cmd, cwd=cli_config.remote_path, capture=True)
         if returncode != 0:
             error_and_exit(f"docker run failed (exit {returncode}).")
-        return {"transport": self.name, "handle": _container_name(local_id)}
+        return {"transport": self.name, "handle": name}
 
     def list_jobs(self, client):
         fmt = "{{.Names}}\t{{.State}}\t{{.Image}}\t{{.Command}}"

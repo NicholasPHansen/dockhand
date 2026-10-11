@@ -6,10 +6,13 @@ from datetime import datetime
 from dockhand.client.base import Client
 
 
-def ts_submit(client: Client, docker_cmd: str, cwd: str, slots: int = 1) -> int:
-    """Submit a docker command to task spooler. Returns the ts job ID."""
+def ts_submit(client: Client, docker_cmd: str, cwd: str, slots: int = 1, label: str | None = None) -> int:
+    """Submit a docker command to task spooler. Returns the ts job ID.
+
+    *label* (`tsp -L`) is shown in front of the command in `tsp -l` as ``[label]docker run ...``."""
     slots_flag = f"-N {slots} " if slots > 1 else ""
-    returncode, stdout = client.run(f"tsp {slots_flag}{docker_cmd}", cwd=cwd, capture=True)
+    label_flag = f"-L {label} " if label else ""
+    returncode, stdout = client.run(f"tsp {slots_flag}{label_flag}{docker_cmd}", cwd=cwd, capture=True)
     if returncode != 0:
         from dockhand.error import error_and_exit
 
@@ -87,7 +90,8 @@ def extract_docker_command(input_string):
 _TIMES_RE = re.compile(r"(\d+\.\d+)/\d+\.\d+/\d+\.\d+")
 
 # The image is the token right after the last `-v host:container:perm` mount (same anchor
-# as extract_docker_command); the container name is dockhand's `--name dockhand-<local_id>`.
+# as extract_docker_command); the container name is dockhand's `--name dockhand-<project>-<hash>`
+# (`dockhand-<local_id>` for jobs submitted before 0.6.0).
 _IMAGE_RE = re.compile(r".*-v\s+\S+:\S+:\w+\s+(\S+)")
 _NAME_RE = re.compile(r"--name\s+(\S+)")
 

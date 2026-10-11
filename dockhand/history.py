@@ -90,11 +90,25 @@ def add_to_history(
     return local_id
 
 
-def get_history_entry(local_id: int) -> dict | None:
-    """Look up a history entry by local job ID."""
+def job_id(entry: dict) -> int | None:
+    """The job ID shown to users and taken by `logs`/`stop`/`urgent`/`remove`/`resubmit`.
+
+    Queued jobs use task spooler's own job ID: ts runs one queue per host, so it is unique across
+    every project sharing it, where per-project local IDs repeat. Direct ``docker run`` jobs have
+    no such ID and keep the local one.
+    """
+    return entry.get("ts_job_id", entry.get("local_id"))
+
+
+def get_history_entry(id: int) -> dict | None:
+    """Look up a history entry by job ID (see ``job_id``).
+
+    ts IDs restart when the ts server does, so the newest matching entry wins. Entries without
+    a ``local_id`` predate the current history format and are skipped.
+    """
     history = load_history()
     for entry in reversed(history):
-        if entry.get("local_id") == local_id:
+        if "local_id" in entry and job_id(entry) == id:
             return entry
     return None
 
@@ -150,7 +164,8 @@ def execute_history(config: DockerConfig):
     table.add_column("Commands")
 
     for entry in history:
-        local_id = str(entry.get("local_id", "-"))
+        shown_id = job_id(entry)
+        shown_id = str(shown_id) if shown_id is not None else "-"
         host = entry.get("host") or "-"
         timestamp = datetime.fromtimestamp(entry["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
         _config = entry["config"]
@@ -165,6 +180,6 @@ def execute_history(config: DockerConfig):
         imagename = _config["imagename"]
         cmds = _config.get("commands") or _config.get("arguments") or []
         commands_str = " ".join(cmds)
-        table.add_row(local_id, host, timestamp, branch, gpus, volumes, imagename, Text(commands_str))
+        table.add_row(shown_id, host, timestamp, branch, gpus, volumes, imagename, Text(commands_str))
 
     Console().print(table)

@@ -86,7 +86,7 @@ Config file: `.dockhand.json` in the project root (must also contain a `.git` �
 - `manage.py` — Job lifecycle: `logs`, `stop`, `remove`, `jobs` (`execute_queue` with the queue enabled, `execute_stats` without), and `prune` (removes baked images no longer referenced by an active job). Also owns job timing (`_observe_job_time`, `_docker_started_at`, `_host_now`).
 - `resubmit.py` — Looks up a history entry and re-invokes `execute_submit` with overrides; pins to the original baked image when applicable.
 - `queue.py` — Task spooler (`tsp`) integration: submit/list/promote/remove/kill, `tsp -l` output parsing, max slot count (`ts_max_slots`), and start times from `tsp -i` (`ts_start_times`).
-- `transport.py` — Abstracts "how a job runs": `TaskSpoolerTransport` (queue enabled) vs. `DockerTransport` (direct `docker run -d`). Both expose the same interface (`run_flags`, `submit`, `list_jobs`, `container_name`, `logs`, `stop`, `remove`) so job-management commands don't care which backend created a job; the transport used is recorded per job in history. Containers are named `dockhand-<local_id>` in both modes (queued: `--rm --name`; direct: `-d --name`, no `--rm` so logs survive exit).
+- `transport.py` — Abstracts "how a job runs": `TaskSpoolerTransport` (queue enabled) vs. `DockerTransport` (direct `docker run -d`). Both expose the same interface (`run_flags`, `submit`, `list_jobs`, `container_name`, `logs`, `stop`, `remove`) so job-management commands don't care which backend created a job; the transport used is recorded per job in history. Containers are named `dockhand-<project>-<hash>` (`new_container_name`) in both modes (queued: `--rm --name`, plus the same name as the `tsp -L` label; direct: `-d --name`, no `--rm` so logs survive exit); jobs from before 0.6.0 are named `dockhand-<local_id>`.
 - `tagging.py` — Resolves the image tag/ref for baked code delivery (content-addressed from git commit + dirty-state hash; unique per queued submit, reused for direct runs).
 - `history.py` — Reads/writes `.dockhand_history.json`, reserves/looks up local job IDs.
 - `volumes.py` — Lists the container filesystem as a tree (code mount + data volumes) and resolves a workdir-relative path back to its host path.
@@ -116,7 +116,8 @@ Stores container runs in `.dockhand_history.json` as JSON. Each entry contains:
   },
   "transport": "task_spooler",   // or "docker"
   "handle": 12,                  // tsp job id, or container name for direct runs
-  "ts_job_id": 12,                // task_spooler transport only
+  "ts_job_id": 12,                // task_spooler transport only; the user-facing job ID
+  "container": "dockhand-my-image-1a2b3c4d",  // task_spooler only; absent before 0.6.0 (`dockhand-<local_id>`)
   "host": "remote.example.com",   // or "localhost"
   "started_at": 1234567891.0,     // optional, set when `jobs`/`logs` first sees it running
   "ended_at": 1234567895.0,       // optional, set when `jobs`/`logs` first sees it finished/failed/stopped
@@ -124,16 +125,18 @@ Stores container runs in `.dockhand_history.json` as JSON. Each entry contains:
 }
 ```
 
+The user-facing job ID (`history.job_id`) is `ts_job_id` for queued jobs — unique host-wide, unlike `local_id` — and `local_id` for direct runs; `get_history_entry` resolves it, newest match first since ts IDs restart with the ts server. `local_id` still keys entries internally (`mark_stopped`, `mark_job_time`, `remove --history`).
+
 Used by `resubmit` (look up a previous run and re-run with overrides, pinning the original baked image when unchanged), `logs`, `stop`, `remove`, `jobs`, `urgent`, `prune` (default to latest if no ID given). Job-management commands dispatch to the transport recorded on the entry (`transport_for_entry`), so `logs`/`stop`/`remove` work the same regardless of whether a job went through the queue or ran directly.
 
 `started_at`/`ended_at` are written the first time `jobs` or `logs` observes a job in the running/terminal state (`_observe_job_time`), but the values come from docker/ts, not the observation time:
-- `started_at` — the container's real `docker inspect .State.StartedAt` (found via the `dockhand-<local_id>` name). Falls back to "now" only if the container can't be inspected (pre-naming jobs, already removed).
+- `started_at` — the container's real `docker inspect .State.StartedAt` (found via the job's container name). Falls back to "now" only if the container can't be inspected (pre-naming jobs, already removed).
 - `ended_at` — `started_at + duration_seconds` from ts's own elapsed-time field when available, else "now".
 - Running durations are measured against the host clock (`_host_now` runs `date +%s` on the host) so local/host clock skew doesn't distort them.
 
 `dockhand jobs` shows Started/Ended (absolute, `%Y-%m-%d %H:%M:%S`) and Duration columns, grouped running → queued → finished/failed/stopped, newest ID first within each group. `dockhand logs` prints a one-line "running for Xm" / "finished in Xm" header before the log output.
 
-With the queue enabled, `dockhand jobs` (`execute_queue`) works almost entirely from task spooler rather than history: it prints the raw host-wide `tsp -l` queue (ts is one shared queue per host), with each job's dockhand ID parsed from its `dockhand-<n>` container name, a Project column from the image name (this project's highlighted), start times and reserved slots from `tsp -i` (`ts_job_info`), and a summary panel on top: running jobs with a slot-usage bar from `tsp -l`'s `[run=N/M]` header (`ts_slot_usage`), and queued jobs with the one that starts next. History is only consulted to mark this project's stopped jobs. Without the queue, `execute_stats` lists this project's `docker run` containers, filtered by history handle or image name.
+With the queue enabled, `dockhand jobs` (`execute_queue`) works almost entirely from task spooler rather than history: it prints the raw host-wide `tsp -l` queue (ts is one shared queue per host), with ts's job ID as the ID, a Project column from the image name (this project's highlighted), start times and reserved slots from `tsp -i` (`ts_job_info`), and a summary panel on top: running jobs with a slot-usage bar from `tsp -l`'s `[run=N/M]` header (`ts_slot_usage`), and queued jobs with the one that starts next. History is only consulted to mark this project's stopped jobs (matched on ts ID and container name). Without the queue, `execute_stats` lists this project's `docker run` containers, filtered by history handle or image name.
 
 ### Design Patterns
 
@@ -175,7 +178,7 @@ Each command:
 | `queue.py` | Task spooler (`tsp`) integration |
 | `transport.py` | Task-spooler vs. direct-docker execution backends |
 | `tagging.py` | Image tag resolution for baked code delivery |
-| `history.py` | Read/write `.dockhand_history.json`, job ID allocation |
+| `history.py` | Read/write `.dockhand_history.json` (at the project root), job ID allocation and lookup |
 | `volumes.py` | Container filesystem tree, path resolution |
 | `download.py` | rsync-based file download from volumes |
 | `tunnel.py` | SSH port forwarding to container ports |

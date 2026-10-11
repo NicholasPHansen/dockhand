@@ -89,16 +89,16 @@ def execute_submit(
     slots: int | None = None,
     image_ref: str | None = None,
 ) -> int:
-    """Optionally sync code, then start a container run. Returns the local job ID.
+    """Optionally sync code, then start a container run. Returns the job ID (see ``history.job_id``).
 
     Runs through the queue (task spooler) when ``queue.enabled``, otherwise starts a
     detached container directly. When ``image_ref`` is given (e.g. resubmitting a baked
     job), that exact pre-built image is run verbatim — no re-resolution and no rebuild.
     """
     from dockhand.build import execute_build
-    from dockhand.history import reserve_local_id
+    from dockhand.history import job_id, reserve_local_id
     from dockhand.tagging import resolve_image_ref
-    from dockhand.transport import get_transport
+    from dockhand.transport import get_transport, new_container_name
 
     if sync:
         execute_sync(confirm_changes=True)
@@ -110,6 +110,7 @@ def execute_submit(
 
     transport = get_transport()
     local_id = reserve_local_id()
+    name = new_container_name()
 
     if image_ref is not None:
         # Rerun an exact pre-built image (baked); no re-resolution, no rebuild.
@@ -134,15 +135,13 @@ def execute_submit(
         gpus,
         effective_ports,
         mount_code=mount_code,
-        run_flags=transport.run_flags(local_id),
+        run_flags=transport.run_flags(name),
     )
 
     with get_client() as client:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}")) as progress:
             task = progress.add_task(description="Submitting job", total=None)
-            handle = transport.submit(
-                client, docker_cmd, local_id=local_id, slots=effective_slots, urgent=urgent
-            )
+            handle = transport.submit(client, docker_cmd, name=name, slots=effective_slots, urgent=urgent)
             progress.update(task, completed=True)
 
     host = cli_config.ssh.hostname if cli_config.ssh else "localhost"
@@ -159,5 +158,6 @@ def execute_submit(
 
     verb = "Queued" if cli_config.queue.enabled else "Started"
     label = "urgent job" if (urgent and cli_config.queue.enabled) else "job"
-    typer.echo(f"{verb} {label} #{local_id}")
-    return local_id
+    shown_id = job_id({"local_id": local_id, **handle})
+    typer.echo(f"{verb} {label} #{shown_id}")
+    return shown_id

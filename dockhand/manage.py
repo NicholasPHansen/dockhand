@@ -14,7 +14,7 @@ from dockhand.client import get_client, get_client_for_host
 from dockhand.client.base import Client
 from dockhand.config import DockerConfig, cli_config
 from dockhand.error import error_and_exit
-from dockhand.history import get_history_entry, load_history, mark_job_time, mark_stopped, save_history
+from dockhand.history import get_history_entry, job_id, load_history, mark_job_time, mark_stopped, save_history
 from dockhand.queue import ts_job_info, ts_list, ts_slot_usage
 from dockhand.transport import Transport, entry_handle, get_transport, transport_for_entry
 
@@ -277,11 +277,15 @@ def execute_queue(config: DockerConfig, limit: int | None = _JOBS_DISPLAY_LIMIT)
         return (job.get("image") or "-").split(":", 1)[0]
 
     # Jobs this project stopped (`dockhand stop`) look like any other finished job to ts.
-    # Matched on ts handle *and* dockhand ID, since ts IDs restart with the ts server.
-    stopped = {(str(entry_handle(e)), e["local_id"]) for e in load_history() if e.get("stopped") and "local_id" in e}
+    # Matched on ts ID *and* container name, since ts IDs restart with the ts server.
+    stopped = {
+        (str(entry_handle(e)), transport_for_entry(e).container_name(e))
+        for e in load_history()
+        if e.get("stopped") and "local_id" in e
+    }
 
     def _state(job: dict) -> str:
-        key = (str(job["id"]), _dockhand_id(job.get("container_name")))
+        key = (str(job["id"]), job.get("container_name"))
         if _project(job) == config.imagename and key in stopped and job["state"] in ("finished", "failed"):
             return "stopped"
         return job["state"]
@@ -295,7 +299,7 @@ def execute_queue(config: DockerConfig, limit: int | None = _JOBS_DISPLAY_LIMIT)
 
     # Running, then queued, then history, newest ID first in each — matches how an operator
     # scans the list: what's active right now, what's next, then what already ran.
-    jobs.sort(key=lambda j: _job_sort_key(_state(j), _dockhand_id(j.get("container_name")), _ended_at(j)))
+    jobs.sort(key=lambda j: _job_sort_key(_state(j), j["id"], _ended_at(j)))
 
     table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
     table.add_column("ID", justify="right", style="bold")
@@ -306,7 +310,6 @@ def execute_queue(config: DockerConfig, limit: int | None = _JOBS_DISPLAY_LIMIT)
     table.add_column("Duration")
     table.add_column("Slots", justify="right")
     table.add_column("Command")
-    table.add_column("TS ID", justify="right", style="dim")
 
     for job in jobs[:limit]:
         state = _state(job)
@@ -317,11 +320,10 @@ def execute_queue(config: DockerConfig, limit: int | None = _JOBS_DISPLAY_LIMIT)
             duration = _format_duration(now - start)
         else:
             duration = "-"
-        # dockhand's own job number, as used by `logs`/`stop`/`urgent` in the submitting project.
-        job_id = _dockhand_id(job.get("container_name"))
         project = _project(job)
         table.add_row(
-            str(job_id) if job_id is not None else "-",
+            # ts's job ID: what `logs`/`stop`/`urgent` take in the submitting project.
+            str(job["id"]),
             # This project's jobs stand out; other projects' are dimmed.
             Text(project, style="bold cyan" if project == config.imagename else "dim"),
             Text(state, style=_STATE_STYLES.get(state, "")),
@@ -330,7 +332,6 @@ def execute_queue(config: DockerConfig, limit: int | None = _JOBS_DISPLAY_LIMIT)
             duration,
             _slots_cell(ts_info.get(job["id"], {}).get("slots"), state),
             Text(_user_command(job["command"], config.imagename)),
-            str(job["id"]),
         )
 
     Console().print(table)
@@ -365,10 +366,9 @@ def _queue_summary(jobs: list[dict], slots: tuple[int, int] | None, ts_info: dic
     up_next = Text()
     if queued:
         nxt = queued[0]
-        nxt_id = _dockhand_id(nxt.get("container_name"))
         project = (nxt.get("image") or "-").split(":", 1)[0]
         ts_id = nxt["id"]
-        up_next.append("next: ", style="dim").append(f"#{nxt_id}" if nxt_id is not None else f"ts {ts_id}")
+        up_next.append("next: ", style="dim").append(f"#{ts_id}")
         up_next.append(f"  {project}", style="dim")
         needs = ts_info.get(ts_id, {}).get("slots")
         if needs is not None:
@@ -389,29 +389,41 @@ def _queue_summary(jobs: list[dict], slots: tuple[int, int] | None, ts_info: dic
     return Panel(grid, title=title, title_align="left", border_style="grey50", expand=False)
 
 
-def _resolve_entry(job_id: int | None) -> tuple[int, dict]:
-    """Resolve a local job ID (or default to last) to (local_id, history_entry)."""
+def missing_job_message(id: int) -> str:
+    """Why job *id* isn't in this project's history. With the queue enabled the ID may well be in
+    the host's shared queue under another project, which is worth saying."""
+    if cli_config.queue.enabled:
+        with get_client() as client:
+            job = next((j for j in ts_list(client, cwd=cli_config.remote_path) if j["id"] == id), None)
+        if job is not None:
+            project = (job.get("image") or "another project").split(":", 1)[0]
+            return f"Job #{id} belongs to {project}, not this project — run this command from there."
+    return f"Job #{id} not found in history."
+
+
+def _resolve_entry(id: int | None) -> tuple[int, dict]:
+    """Resolve a job ID (or default to last) to (job ID, history_entry)."""
     history = load_history()
     if not history:
-        error_and_exit("No job history found. Provide a job ID.")
-    if job_id is None:
+        error_and_exit("No job history found. Submit a job first.")
+    if id is None:
         entry = history[-1]
-        return entry["local_id"], entry
-    entry = get_history_entry(job_id)
+        return job_id(entry), entry
+    entry = get_history_entry(id)
     if entry is None:
-        error_and_exit(f"Job #{job_id} not found in history.")
-    return job_id, entry
+        error_and_exit(missing_job_message(id))
+    return id, entry
 
 
-def _duration_header(local_id: int, state: str, started_at: float | None, ended_at: float | None, now: float) -> str:
+def _duration_header(id: int, state: str, started_at: float | None, ended_at: float | None, now: float) -> str:
     if state == "queued":
-        return f"Job #{local_id} — queued (not started yet)."
+        return f"Job #{id} — queued (not started yet)."
     if state == "running":
         duration = _format_duration(now - started_at) if started_at is not None else "unknown"
-        return f"Job #{local_id} — running for {duration}."
+        return f"Job #{id} — running for {duration}."
     if started_at is not None and ended_at is not None:
-        return f"Job #{local_id} — {state} in {_format_duration(ended_at - started_at)}."
-    return f"Job #{local_id} — {state}."
+        return f"Job #{id} — {state} in {_format_duration(ended_at - started_at)}."
+    return f"Job #{id} — {state}."
 
 
 def execute_logs(
@@ -422,7 +434,7 @@ def execute_logs(
     follow: bool,
 ):
     """Show logs from a job (via the tsp output file, or ``docker logs``)."""
-    local_id, entry = _resolve_entry(job_id)
+    shown_id, entry = _resolve_entry(job_id)
     host = entry.get("host", "localhost")
     transport = transport_for_entry(entry)
     with get_client_for_host(host) as client:
@@ -436,23 +448,23 @@ def execute_logs(
             if _observe_job_time(
                 client, transport, entry, state=state, duration_seconds=job.get("duration_seconds"), now=now
             ):
-                mark_job_time(local_id, started_at=entry.get("started_at"), ended_at=entry.get("ended_at"))
-            typer.echo(_duration_header(local_id, state, entry.get("started_at"), entry.get("ended_at"), now))
+                mark_job_time(entry["local_id"], started_at=entry.get("started_at"), ended_at=entry.get("ended_at"))
+            typer.echo(_duration_header(shown_id, state, entry.get("started_at"), entry.get("ended_at"), now))
         returncode = transport.logs(client, entry, n=n, follow=follow)
     if returncode != 0:
-        error_and_exit(f"Could not read logs for job #{local_id}. The job may still be queued and not yet started.")
+        error_and_exit(f"Could not read logs for job #{shown_id}. The job may still be queued and not yet started.")
 
 
 def execute_stop(config: DockerConfig, *, job_id: int | None = None):
     """Stop a running job or cancel a queued one."""
-    local_id, entry = _resolve_entry(job_id)
+    shown_id, entry = _resolve_entry(job_id)
     host = entry.get("host", "localhost")
     with get_client_for_host(host) as client:
         if transport_for_entry(entry).stop(client, entry):
-            mark_stopped(local_id)
-            typer.echo(f"Stopped job #{local_id}.")
+            mark_stopped(entry["local_id"])
+            typer.echo(f"Stopped job #{shown_id}.")
         else:
-            error_and_exit(f"Failed to stop job #{local_id}.")
+            error_and_exit(f"Failed to stop job #{shown_id}.")
 
 
 def execute_remove(
@@ -465,21 +477,21 @@ def execute_remove(
         history = load_history()
         if not history:
             error_and_exit("No job history found. Provide a job ID.")
-        job_ids = [history[-1]["local_id"]]
+        job_ids = [job_id(history[-1])]
 
-    removed = []
-    for local_id in job_ids:
-        entry = get_history_entry(local_id)
+    removed = []  # local IDs, which key the history entries
+    for id in job_ids:
+        entry = get_history_entry(id)
         if entry is None:
-            typer.echo(f"Job #{local_id} not found in history.")
+            typer.echo(missing_job_message(id))
             continue
         host = entry.get("host", "localhost")
         with get_client_for_host(host) as client:
             if transport_for_entry(entry).remove(client, entry):
-                typer.echo(f"Removed job #{local_id}.")
-                removed.append(local_id)
+                typer.echo(f"Removed job #{id}.")
+                removed.append(entry["local_id"])
             else:
-                typer.echo(f"Failed to remove job #{local_id} (it may have already finished).")
+                typer.echo(f"Failed to remove job #{id} (it may have already finished).")
 
     if from_history and removed:
         history = load_history()
@@ -501,7 +513,7 @@ def _baked_image_refs(history: list[dict]) -> dict[str, list]:
         cfg = entry.get("config", {})
         ref = cfg.get("image_ref")
         if ref and ref != cfg.get("imagename"):
-            refs.setdefault(ref, []).append(entry.get("local_id"))
+            refs.setdefault(ref, []).append(job_id(entry))
     return refs
 
 
