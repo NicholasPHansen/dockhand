@@ -11,8 +11,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from dockhand.config import DockerConfig
-from dockhand.constants import HISTORY_FILENAME
+from dockhand.config import DockerConfig, cli_config
 
 DOCKER_HISTORY_FILE = Path(".dockhand_history.json")
 
@@ -20,7 +19,7 @@ DOCKER_HISTORY_FILE = Path(".dockhand_history.json")
 def load_history() -> list[dict]:
     """Load container run history from disk."""
     # path = DOCKER_HISTORY_FILE
-    path = Path(HISTORY_FILENAME)
+    path = cli_config.history_path
     if not path.exists():
         return []
     return json.loads(path.read_text())
@@ -29,7 +28,7 @@ def load_history() -> list[dict]:
 def save_history(history: list[dict]):
     """Save container run history to disk."""
     # path = DOCKER_HISTORY_FILE
-    path = Path(HISTORY_FILENAME)
+    path = cli_config.history_path
     path.write_text(json.dumps(history))
 
 
@@ -133,7 +132,7 @@ def mark_job_time(local_id: int, *, started_at: float | None = None, ended_at: f
 
 def execute_history(config: DockerConfig):
     """Show history of past Docker runs."""
-    history_file = Path(HISTORY_FILENAME)
+    history_file = cli_config.history_path
     if not history_file.exists():
         typer.echo(f"No history found in '{history_file}'. You might not have submitted any jobs yet.")
         return
